@@ -2,6 +2,28 @@
 
 A local LiteLLM proxy on `http://localhost:4000/v1` that fronts **25+ verified LLM upstreams** behind one OpenAI-compatible endpoint with automatic rate-limit rotation.
 
+## Paid Spillover Policy (Important)
+
+- Default behavior is `ALLOW_PAID_SPILLOVER=1`.
+- This means free model groups are allowed to spill over into paid groups when free providers are rate-limited, cooling down, or unavailable.
+- If you want strict free-only behavior, set `ALLOW_PAID_SPILLOVER=0` when starting the proxy.
+- With spillover off, if all free providers are limited/unavailable, requests can fail or wait until free capacity returns.
+
+Examples:
+
+```bash
+# Default (paid spillover enabled)
+bash tools/start_litellm_proxy.sh -b
+
+# Strict free-only mode (no paid spillover)
+ALLOW_PAID_SPILLOVER=0 bash tools/start_litellm_proxy.sh -b
+```
+
+Safety guidance:
+
+- If you do not want any chance of paid usage, either do not provide paid keys or run with `ALLOW_PAID_SPILLOVER=0`.
+- If you provide paid keys and keep default settings, paid usage can occur during fallback.
+
 ## Security Model
 
 **NO API KEYS are stored in this repository.** All keys are sourced from an external file at launch time.
@@ -88,6 +110,7 @@ print(resp.choices[0].message.content)
 - **Rotation**: `simple-shuffle` — picks random upstream per request
 - **Retries**: 2 retries with per-error-type policies (0 for auth failures, 3 for rate limits)
 - **Fallbacks**: Oversize prompts auto-route to `*-large` variants via context window detection
+- **Spillover control**: `ALLOW_PAID_SPILLOVER=1` (default) allows free→paid fallback; set `ALLOW_PAID_SPILLOVER=0` for strict free-only fallback behavior.
 - **Cooldown**: Custom smart-cooldown logger classifies failures and records meaningful unban times
 
 ## Keys File Format (`~/dbpasses.txt`)
@@ -186,7 +209,7 @@ These providers were audited but are NOT active due to account restrictions:
 | Cloudflare Workers AI | Daily 10k-neuron quota exhausted; auto-rejoins at UTC midnight |
 | HuggingFace (3 tokens) | Monthly account-pool credits depleted; resets first of next month |
 | xAI Grok | Key reports invalid per xAI; needs regeneration at console.x.ai |
-| Inception (mercury) | Locked to accounts created before cutoff date |
+| Inception (mercury) | `mercury` is cutoff-gated, but `mercury-2` works on current keys |
 | Ollama Cloud | SSH-ed25519 public key requiring JWT signing, not bearer auth |
 | Qwen DashScope | Key invalid per provider; re-issue needed |
 | Chutes | Account balance $0 |

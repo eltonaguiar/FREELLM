@@ -321,7 +321,7 @@ def t_llm7(key: str) -> tuple[str, str]:
 
 
 def t_inception(key: str) -> tuple[str, str]:
-    return t_openai_compat("https://api.inceptionlabs.ai/v1/chat/completions", key, "mercury")
+    return t_openai_compat("https://api.inceptionlabs.ai/v1/chat/completions", key, "mercury-2")
 
 
 # ---------- test plan ----------

@@ -16,6 +16,7 @@
 #   bash tools/start_litellm_proxy.sh                      # foreground
 #   bash tools/start_litellm_proxy.sh --background         # nohup + log
 #   bash tools/start_litellm_proxy.sh --port 5000          # alt port
+#   ALLOW_PAID_SPILLOVER=0 bash tools/start_litellm_proxy.sh -b
 #   PROXY_LOG=/tmp/litellm.log bash tools/start_litellm_proxy.sh -b
 #
 # Stop a backgrounded proxy: kill the PID printed at launch, or:
@@ -27,6 +28,7 @@ cd "$(dirname "$0")/.."
 
 KEYS_FILE="${KEYS_FILE:-$HOME/dbpasses.txt}"
 CONFIG="${CONFIG:-litellm_config.yaml}"
+ALLOW_PAID_SPILLOVER="${ALLOW_PAID_SPILLOVER:-1}"
 PORT="${PORT:-4000}"
 BG=0
 LOG="${PROXY_LOG:-/tmp/litellm_proxy.log}"
@@ -52,10 +54,52 @@ if [[ ! -f "$CONFIG" ]]; then
   echo "ERROR: config not found: $CONFIG" >&2
   exit 1
 fi
+if [[ "$ALLOW_PAID_SPILLOVER" != "0" && "$ALLOW_PAID_SPILLOVER" != "1" ]]; then
+  echo "ERROR: ALLOW_PAID_SPILLOVER must be 0 or 1 (got: $ALLOW_PAID_SPILLOVER)" >&2
+  exit 2
+fi
 if [[ ! -x .venv/bin/litellm ]]; then
   echo "ERROR: .venv/bin/litellm not found; install with:" >&2
   echo "  .venv/bin/python -m pip install 'litellm[proxy]'" >&2
   exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Runtime spillover policy switch
+#   ALLOW_PAID_SPILLOVER=1 (default): free groups can fall back to paid groups.
+#   ALLOW_PAID_SPILLOVER=0: free groups stay free-only; when free pools exhaust,
+#                           requests can fail/wait instead of spending paid keys.
+# ---------------------------------------------------------------------------
+ACTIVE_CONFIG="$CONFIG"
+if [[ "$ALLOW_PAID_SPILLOVER" == "0" ]]; then
+  ACTIVE_CONFIG="/tmp/litellm_config.nospillover.${PORT}.$$.yaml"
+  cp "$CONFIG" "$ACTIVE_CONFIG"
+
+  python3 - "$ACTIVE_CONFIG" << 'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+replacements = [
+    (r'^(\s*-\s*hybrid-model:\s*)\[[^\]]*\]', r'\1["free-mode-large", "free-mode"]'),
+    (r'^(\s*-\s*free-mode:\s*)\[[^\]]*\]', r'\1["free-mode-large"]'),
+    (r'^(\s*-\s*free-mode-large:\s*)\[[^\]]*\]', r'\1["free-mode"]'),
+    (r'^(\s*-\s*free-mode-fast:\s*)\[[^\]]*\]', r'\1["free-mode", "free-mode-large"]'),
+    (r'^(\s*-\s*free-mode-tools:\s*)\[[^\]]*\]', r'\1["free-mode-fast", "free-mode", "free-mode-large"]'),
+]
+
+for pattern, repl in replacements:
+    text = re.sub(pattern, repl, text, flags=re.MULTILINE)
+
+path.write_text(text, encoding="utf-8")
+PY
+
+  echo "[litellm-proxy] paid spillover: DISABLED (ALLOW_PAID_SPILLOVER=0)"
+else
+  echo "[litellm-proxy] paid spillover: ENABLED (ALLOW_PAID_SPILLOVER=1)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -171,7 +215,7 @@ for v in NVIDIA_API_KEY NVIDIA_API_KEY_ALT GROQ_API_KEY GEMINI_API_KEY GEMINI_AP
   if [[ -n "${!v:-}" ]]; then loaded=$((loaded+1)); fi
 done
 echo "[litellm-proxy] keys loaded: $loaded / $total"
-echo "[litellm-proxy] config: $CONFIG"
+echo "[litellm-proxy] config: $ACTIVE_CONFIG"
 echo "[litellm-proxy] port:   $PORT"
 
 # Record this restart in a history file so the monitor can correctly classify
@@ -184,7 +228,7 @@ with open('$RESTART_HISTORY', 'a') as fh:
     fh.write(json.dumps({
         'utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'pid': $1,
-        'config': '$CONFIG',
+        'config': '$ACTIVE_CONFIG',
         'port': '$PORT',
     }) + '\n')
 "
@@ -192,7 +236,7 @@ with open('$RESTART_HISTORY', 'a') as fh:
 
 if [[ $BG -eq 1 ]]; then
   echo "[litellm-proxy] starting in background, log → $LOG"
-  nohup .venv/bin/litellm --config "$CONFIG" --port "$PORT" --num_workers 1 \
+  nohup .venv/bin/litellm --config "$ACTIVE_CONFIG" --port "$PORT" --num_workers 1 \
     > "$LOG" 2>&1 &
   PID=$!
   record_restart "$PID"
@@ -200,5 +244,5 @@ if [[ $BG -eq 1 ]]; then
   echo "[litellm-proxy] tail -f $LOG  to watch"
 else
   record_restart "$$"
-  exec .venv/bin/litellm --config "$CONFIG" --port "$PORT" --num_workers 1
+  exec .venv/bin/litellm --config "$ACTIVE_CONFIG" --port "$PORT" --num_workers 1
 fi

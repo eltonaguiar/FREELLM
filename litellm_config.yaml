@@ -11,7 +11,7 @@
 #   ollama_cloud    — value is ssh-ed25519 public key, needs SSH JWT signing (not bearer)
 #   chutes          — account balance $0, quota exceeded
 #   qwen            — key invalid ("Incorrect API key provided")
-#   inception       — model only for accounts created before a cutoff date
+#   inception       — legacy `mercury` is cutoff-gated; `mercury-2` works
 #   deepinfra (1°)  — primary key dead, use DEEPINFRA_API_KEY_ALT
 #   aimlapi (free)  — ALL_TIME_LIMIT exhausted (paid key works)
 #   hf (any)        — monthly account-pool credits depleted (smart_cooldown parks)
