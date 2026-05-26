@@ -146,9 +146,11 @@ Output includes, per response:
 - HTTP status and finish reason
 - reply text
 
-## Free Provider Key Links
+## Free Provider Key Links*
 
 No secrets are stored in this repo. Acquire keys from official provider portals, then place them in `~/dbpasses.txt` using the labels expected by `tools/start_litellm_proxy.sh`.
+
+*Use at your own risk. Always verify each provider's current terms, quota limits, model restrictions, pricing rules, and acceptable-use policy before using any key in production.*
 
 | Free Provider (in config) | Key / Account Link |
 |---|---|
