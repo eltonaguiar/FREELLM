@@ -207,6 +207,14 @@ No secrets are stored in this repo. Acquire keys from official provider portals,
 
 Note: Some providers require creating a project/workspace before API key pages appear.
 
+## Paid Provider Key Links*
+
+Paid providers are supported for `paid-mode` and/or direct-target aliases.
+
+| Paid Provider | Key / Account Link | Status in This Repo |
+|---|---|---|
+| Novita | https://novita.ai/ | Supported via direct alias `novita-deepseek-v4-pro-direct`; intentionally excluded from paid rotation while key is balance-blocked |
+
 ## Skipped Upstreams
 
 These providers were audited but are NOT active due to account restrictions:
@@ -222,6 +230,7 @@ These providers were audited but are NOT active due to account restrictions:
 | Chutes | Account balance $0 |
 | AIMLAPI (free) | ALL_TIME_LIMIT reached (paid key works, in paid-mode) |
 | OpenAI direct | Quota exhausted; surfaces if topped up |
+| Novita | Key is valid but returns `NOT_ENOUGH_BALANCE`; supported as direct alias only (not in paid rotation) |
 
 ## Troubleshooting
 

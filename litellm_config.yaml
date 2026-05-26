@@ -18,6 +18,7 @@
 #   hf (any)        — monthly account-pool credits depleted (smart_cooldown parks)
 #   cloudflare      — daily 10k-neuron quota (smart_cooldown parks until UTC midnight)
 #   openai          — out of quota; left as paid-mode entry so it surfaces if topped up
+#   novita          — key valid but current account has NOT_ENOUGH_BALANCE; supported as direct alias only
 
 litellm_settings:
   drop_params: true
@@ -250,3 +251,4 @@ model_list:
   - {model_name: openrouter-ring-1t, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
   - {model_name: claude-haiku-direct, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY_ALT}}
   - {model_name: deepseek-chat-direct, litellm_params: {model: deepseek/deepseek-chat, api_key: os.environ/DEEPSEEK_API_KEY}}
+  - {model_name: novita-deepseek-v4-pro-direct, litellm_params: {model: openai/deepseek/deepseek-v4-pro, api_key: os.environ/NOVITA_API_KEY, api_base: https://api.novita.ai/openai/v1}}

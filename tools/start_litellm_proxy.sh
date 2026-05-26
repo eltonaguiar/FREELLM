@@ -187,6 +187,7 @@ parse_key "QWEN_API_KEY_PRO"                                                    
 parse_key "CHUTES"                                                                   CHUTES_API_KEY
 parse_key "LLM7_API_KEY_FREE"                                                        LLM7_API_KEY
 parse_key "INCEPTION_AI_KEY"                                                         INCEPTION_API_KEY
+parse_key "NOVITA API KEY:"                                                         NOVITA_API_KEY
 parse_key "CURSOR_API_KEY"                                                           CURSOR_API_KEY
 parse_key "KILOCODE_API_KEY"                                                         KILOCODE_API_KEY
 parse_key "OPENCODE_API_KEY"                                                         OPENCODE_API_KEY
@@ -210,7 +211,7 @@ for v in NVIDIA_API_KEY NVIDIA_API_KEY_ALT GROQ_API_KEY GEMINI_API_KEY GEMINI_AP
          CF_ACCOUNT_ID CF_API_TOKEN OPENROUTER_API_KEY OFOX_AI_KEY XAI_API_KEY \
          OLLAMA_CLOUD_KEY ANTHROPIC_API_KEY ANTHROPIC_API_KEY_ALT DEEPSEEK_API_KEY \
          MOONSHOT_API_KEY OPENAI_API_KEY QWEN_API_KEY CHUTES_API_KEY LLM7_API_KEY \
-         INCEPTION_API_KEY CURSOR_API_KEY KILOCODE_API_KEY OPENCODE_API_KEY \
+         INCEPTION_API_KEY NOVITA_API_KEY CURSOR_API_KEY KILOCODE_API_KEY OPENCODE_API_KEY \
          BLUESMIND_API_KEY XAI_API_KEY_ALT GROQ_API_KEY_ALT; do
   total=$((total+1))
   if [[ -n "${!v:-}" ]]; then loaded=$((loaded+1)); fi
