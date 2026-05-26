@@ -1,0 +1,32 @@
+# Secrets — MUST NEVER enter git
+dbpasses.txt
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Runtime / tmp
+/tmp/*
+!/.gitkeep
+
+# Proxy artifacts
+logs/
+/tmp/litellm_proxy.log
+/tmp/litellm_cooldown_state.json
+/tmp/litellm_restart_history.jsonl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
