@@ -142,6 +142,7 @@ nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 | `tools/litellm_smart_cooldown.py` | Custom logger — classifies failures, writes cooldown state |
 | `tools/vllmp_mode_status.py` | Dashboard showing group health + recent request counts |
 | `tools/triple_ask_free.py` | Ask 3 free aliases and print upstream model/provider metadata per reply |
+| `tools/check_hf_model_callable.py` | Check whether HF model IDs are callable via HF Router (hub existence + router callable + prompt probe) |
 
 ```bash
 # Health-check all keys (spins up 10 concurrent threads)
@@ -152,6 +153,11 @@ python3 tools/vllmp_mode_status.py
 
 # Tail proxy log with 429/cooldown highlights
 tail -f /tmp/litellm_proxy.log | grep -iE '429|RateLimit|cooldown'
+
+# Check whether specific Hugging Face models are callable via HF Router
+python3 tools/check_hf_model_callable.py \
+  meta-llama/Llama-3.1-8B-Instruct \
+  cutycat2000/MeowGPT-2
 ```
 
 ## Triple Ask Free Command
