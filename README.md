@@ -200,6 +200,7 @@ No secrets are stored in this repo. Acquire keys from official provider portals,
 | Kilocode | https://kilocode.ai/ |
 | Opencode | https://opencode.ai/ |
 | Cerebras | https://cloud.cerebras.ai/ |
+| Cohere (trial) | https://dashboard.cohere.com/api-keys |
 | Together AI | https://api.together.xyz/settings/api-keys |
 | AIMLAPI (free tier) | https://aimlapi.com/ |
 | Hypereal | https://hypereal.cloud/ |
@@ -213,7 +214,7 @@ These providers were audited but are NOT active due to account restrictions:
 | Provider | Reason |
 |----------|--------|
 | Cloudflare Workers AI | Daily 10k-neuron quota exhausted; auto-rejoins at UTC midnight |
-| HuggingFace (3 tokens) | Monthly account-pool credits depleted; resets first of next month |
+| HuggingFace (specific model IDs) | Token works, but many hub-trending model IDs are not exposed via HF Router |
 | xAI Grok | Key reports invalid per xAI; needs regeneration at console.x.ai |
 | Inception (mercury) | `mercury` is cutoff-gated, but `mercury-2` works on current keys |
 | Ollama Cloud | SSH-ed25519 public key requiring JWT signing, not bearer auth |

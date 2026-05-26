@@ -39,6 +39,7 @@ LABELS: list[tuple[str, str]] = [
     ("TOGETHER_API_KEY",        "TOGETHER AI API KEY:"),
     ("TOGETHER_API_KEY_ALT",    "TOGETHER AI API KEY ALT:"),
     ("CEREBRAS_API_KEY",        "CEREBRAS_FREE_API_KEY:"),
+    ("COHERE_API_KEY",          "COHERE_TRIAL_API_KEY"),
     ("HF_API_TOKEN_ALT",        "HUGGING_FACE_TOKEN ALT(TRIED FINE GRAIN AND SETTING BUNCH OF CHECKBOXES):"),
     ("HF_API_TOKEN_READ",       "HUGGINF_FACE TOKEN ALT2(READ):"),
     ("FIREWORKS_API_KEY",       "FIREWORKS FREE API KEY:"),
@@ -214,6 +215,34 @@ def t_cerebras(key: str) -> tuple[str, str]:
     return t_openai_compat("https://api.cerebras.ai/v1/chat/completions", key, "llama3.1-8b")
 
 
+def t_cohere(key: str) -> tuple[str, str]:
+    s, b = _post(
+        "https://api.cohere.com/v2/chat",
+        {"Authorization": f"Bearer {key}"},
+        {
+            "model": "command-r7b-12-2024",
+            "messages": [{"role": "user", "content": PROMPT}],
+            "max_tokens": 50,
+        },
+    )
+    cls = _classify(s, b)
+    reply = ""
+    try:
+        d = json.loads(b)
+        content = (d.get("message") or {}).get("content")
+        if isinstance(content, list) and content:
+            first = content[0]
+            if isinstance(first, dict):
+                reply = str(first.get("text", ""))[:50]
+        elif isinstance(content, str):
+            reply = content[:50]
+        if not reply:
+            reply = _extract_reply(b)
+    except Exception:
+        reply = b[:60]
+    return cls, reply
+
+
 def t_hf(key: str) -> tuple[str, str]:
     return t_openai_compat("https://router.huggingface.co/v1/chat/completions", key, "openai/gpt-oss-20b:cheapest")
 
@@ -337,6 +366,7 @@ TESTS: list[tuple[str, str, Any]] = [
     ("together",          "TOGETHER_API_KEY",        t_together),
     ("together (alt)",    "TOGETHER_API_KEY_ALT",    t_together),
     ("cerebras",          "CEREBRAS_API_KEY",        t_cerebras),
+    ("cohere (trial)",    "COHERE_API_KEY",          t_cohere),
     ("hf (alt)",          "HF_API_TOKEN_ALT",        t_hf),
     ("hf (read)",         "HF_API_TOKEN_READ",       t_hf),
     ("fireworks",         "FIREWORKS_API_KEY",       t_fireworks),

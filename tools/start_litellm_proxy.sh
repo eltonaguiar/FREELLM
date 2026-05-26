@@ -147,6 +147,7 @@ parse_key "GOOGLE GEMIINI API KEY ALT:"                                         
 parse_key "GITHUB MODELS API KEY:"                                                   GITHUB_MODELS_KEY
 parse_key "TOGETHER AI API KEY:"                                                     TOGETHER_API_KEY
 parse_key "CEREBRAS_FREE_API_KEY:"                                                   CEREBRAS_API_KEY
+parse_key "COHERE_TRIAL_API_KEY"                                                    COHERE_API_KEY
 parse_key "HUGGING_FACE_TOKEN"                                                       HF_API_TOKEN
 parse_key "FIREWORKS FREE API KEY:"                                                  FIREWORKS_API_KEY
 parse_key "DEEPINFRA API KEY:"                                                       DEEPINFRA_API_KEY
@@ -202,7 +203,7 @@ fi
 loaded=0; total=0
 for v in NVIDIA_API_KEY NVIDIA_API_KEY_ALT GROQ_API_KEY GEMINI_API_KEY GEMINI_API_KEY_ALT \
          GITHUB_MODELS_KEY GITHUB_MODELS_KEY2 TOGETHER_API_KEY TOGETHER_API_KEY_ALT \
-         CEREBRAS_API_KEY HF_API_TOKEN HF_API_TOKEN_ALT HF_API_TOKEN_READ \
+         CEREBRAS_API_KEY COHERE_API_KEY HF_API_TOKEN HF_API_TOKEN_ALT HF_API_TOKEN_READ \
          FIREWORKS_API_KEY FIREWORKS_API_KEY_ALT DEEPINFRA_API_KEY DEEPINFRA_API_KEY_ALT \
          NOUS_API_KEY NOUS_API_KEY_ALT MISTRAL_API_KEY MISTRAL_API_KEY_ALT MISTRAL_API_KEY_ALT2 \
          AIMLAPI_FREE_KEY AIMLAPI_PAID_KEY HYPEREAL_API_KEY HYPEREAL_API_KEY_ALT \

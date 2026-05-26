@@ -13,6 +13,7 @@
 #   qwen            — key invalid ("Incorrect API key provided")
 #   inception       — legacy `mercury` is cutoff-gated; `mercury-2` works
 #   deepinfra (1°)  — primary key dead, use DEEPINFRA_API_KEY_ALT
+#   cohere          — trial key works (command-r7b-12-2024)
 #   aimlapi (free)  — ALL_TIME_LIMIT exhausted (paid key works)
 #   hf (any)        — monthly account-pool credits depleted (smart_cooldown parks)
 #   cloudflare      — daily 10k-neuron quota (smart_cooldown parks until UTC midnight)
@@ -69,6 +70,7 @@ model_list:
 
   - {model_name: free-mode, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY}}
   - {model_name: free-mode, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY_ALT}}
+  - {model_name: free-mode, litellm_params: {model: cohere/command-r7b-12-2024, api_key: os.environ/COHERE_API_KEY}}
 
   - {model_name: free-mode, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY,  api_base: https://models.inference.ai.azure.com}}
   - {model_name: free-mode, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY2, api_base: https://models.inference.ai.azure.com}}
