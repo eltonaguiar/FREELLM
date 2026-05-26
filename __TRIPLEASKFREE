@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ask 3 different free models via local LiteLLM proxy.
+# Usage:
+#   ./__TRIPLEASKFREE -q "your query here"
+
+cd "$(dirname "$0")"
+exec python3 tools/triple_ask_free.py "$@"

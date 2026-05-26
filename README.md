@@ -116,6 +116,7 @@ nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 | `tools/verify_all_keys.py` | Concurrent health-check of every key against live endpoints |
 | `tools/litellm_smart_cooldown.py` | Custom logger — classifies failures, writes cooldown state |
 | `tools/vllmp_mode_status.py` | Dashboard showing group health + recent request counts |
+| `tools/triple_ask_free.py` | Ask 3 free aliases and print upstream model/provider metadata per reply |
 
 ```bash
 # Health-check all keys (spins up 10 concurrent threads)
@@ -127,6 +128,50 @@ python3 tools/vllmp_mode_status.py
 # Tail proxy log with 429/cooldown highlights
 tail -f /tmp/litellm_proxy.log | grep -iE '429|RateLimit|cooldown'
 ```
+
+## Triple Ask Free Command
+
+You can ask 3 free model routes in one command and see which upstream provider/model replied.
+
+```bash
+./__TRIPLEASKFREE -q "your question here"
+```
+
+Output includes, per response:
+- alias
+- upstream model id
+- returned model name
+- upstream provider
+- upstream host
+- HTTP status and finish reason
+- reply text
+
+## Free Provider Key Links
+
+No secrets are stored in this repo. Acquire keys from official provider portals, then place them in `~/dbpasses.txt` using the labels expected by `tools/start_litellm_proxy.sh`.
+
+| Free Provider (in config) | Key / Account Link |
+|---|---|
+| Groq | https://console.groq.com/keys |
+| NVIDIA NIM | https://build.nvidia.com/ |
+| Google Gemini | https://aistudio.google.com/app/apikey |
+| GitHub Models (Azure endpoint) | https://github.com/settings/personal-access-tokens |
+| Fireworks | https://fireworks.ai/account/api-keys |
+| DeepInfra | https://deepinfra.com/dash/api_keys |
+| Nous Research (Inference API) | https://portal.nousresearch.com/ |
+| Mistral | https://console.mistral.ai/api-keys/ |
+| OpenRouter | https://openrouter.ai/keys |
+| OFOX | https://ofox.ai/ |
+| LLM7 | https://llm7.io/ |
+| Bluesmind | https://api.bluesminds.com/ |
+| Kilocode | https://kilocode.ai/ |
+| Opencode | https://opencode.ai/ |
+| Cerebras | https://cloud.cerebras.ai/ |
+| Together AI | https://api.together.xyz/settings/api-keys |
+| AIMLAPI (free tier) | https://aimlapi.com/ |
+| Hypereal | https://hypereal.cloud/ |
+
+Note: Some providers require creating a project/workspace before API key pages appear.
 
 ## Skipped Upstreams
 
