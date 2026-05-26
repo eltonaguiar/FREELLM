@@ -6,6 +6,8 @@ A local LiteLLM proxy on `http://localhost:4000/v1` that fronts **25+ verified L
 
 **NO API KEYS are stored in this repository.** All keys are sourced from an external file at launch time.
 
+Need provider sign-up pages? See [Free Provider Key Links](#free-provider-key-links).
+
 | File | Location | In Git? |
 |------|----------|---------|
 | Keys file (`dbpasses.txt`) | `~/dbpasses.txt` (home directory, outside repo) | **NO** |
