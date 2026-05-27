@@ -28,9 +28,10 @@ litellm_settings:
 
 router_settings:
   routing_strategy: simple-shuffle
+  enable_pre_call_checks: true
   num_retries: 2
   allowed_fails: 1
-  cooldown_time: 300
+  cooldown_time: 65
   retry_after: 1
   context_window_fallbacks:
     - free-mode: ["free-mode-large"]
@@ -69,8 +70,22 @@ model_list:
   - {model_name: free-mode, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY,     api_base: https://integrate.api.nvidia.com/v1}}
   - {model_name: free-mode, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY_ALT, api_base: https://integrate.api.nvidia.com/v1}}
 
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY_ALT}}
+  # Google model limits (from dashboard) are enforced per deployment via rpm.
+  # Router pre-call checks + cooldown rotate first, then wait for next window.
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-3-flash-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemma-4-26b-a4b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemma-4-31b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  # Requested additions: currently quota-gated in direct checks; keep low rpm
+  # so router can try them opportunistically without causing noisy churn.
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.0-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.0-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
   - {model_name: free-mode, litellm_params: {model: cohere/command-r7b-12-2024, api_key: os.environ/COHERE_API_KEY}}
 
   - {model_name: free-mode, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY,  api_base: https://models.inference.ai.azure.com}}
@@ -174,8 +189,18 @@ model_list:
   # ====================================================================
   # FREE MODE LARGE — long-context fallback (>=128k input)
   # ====================================================================
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY_ALT}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-3-flash-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemma-4-26b-a4b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemma-4-31b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.0-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.0-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
   - {model_name: free-mode-large, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
   - {model_name: free-mode-large, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
   - {model_name: free-mode-large, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY}}
@@ -186,7 +211,8 @@ model_list:
   - {model_name: paid-mode, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY_ALT}}
   - {model_name: paid-mode, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY}}
   - {model_name: paid-mode, litellm_params: {model: deepseek/deepseek-chat, api_key: os.environ/DEEPSEEK_API_KEY}}
-  - {model_name: paid-mode, litellm_params: {model: openai/moonshot-v1-8k, api_key: os.environ/MOONSHOT_API_KEY, api_base: https://api.moonshot.ai/v1}}
+  - {model_name: paid-mode, litellm_params: {model: openai/moonshot-v1-8k, api_key: os.environ/MOONSHOT_API_KEY, api_base: https://api.moonshot.ai/v1, rpm: 5000, tpm: 3000000}}
+  - {model_name: paid-mode, litellm_params: {model: openai/moonshot-v1-8k, api_key: os.environ/MOONSHOT_API_KEY_ALT, api_base: https://api.moonshot.ai/v1, rpm: 5000, tpm: 3000000}}
   - {model_name: paid-mode, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/AIMLAPI_PAID_KEY, api_base: https://api.aimlapi.com/v1}}
   - {model_name: paid-mode, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
   - {model_name: paid-mode, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY_ALT, api_base: https://api.hypereal.cloud/v1}}
@@ -233,11 +259,18 @@ model_list:
   # ====================================================================
   - {model_name: hybrid-model, litellm_params: {model: groq/llama-3.1-8b-instant, api_key: os.environ/GROQ_API_KEY}}
   - {model_name: hybrid-model, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
-  - {model_name: hybrid-model, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY}}
+  - {model_name: hybrid-model, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
   - {model_name: hybrid-model, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY, api_base: https://models.inference.ai.azure.com}}
   - {model_name: hybrid-model, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-flash-latest, api_key: os.environ/GEMINI_API_KEY_ALT}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.0-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.0-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
   - {model_name: hybrid-model-large, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
   - {model_name: hybrid-model-large, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
   - {model_name: hybrid-model-large, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY}}

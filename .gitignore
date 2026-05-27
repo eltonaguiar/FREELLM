@@ -24,6 +24,9 @@ logs/
 /tmp/litellm_cooldown_state.json
 /tmp/litellm_restart_history.jsonl
 
+# Local spend ledger (sensitive usage/cost telemetry)
+.local/spend/
+
 # IDE
 .vscode/
 .idea/

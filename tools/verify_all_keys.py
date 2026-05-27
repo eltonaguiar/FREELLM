@@ -34,6 +34,7 @@ LABELS: list[tuple[str, str]] = [
     ("GROQ_API_KEY",            "GROQ FREE KEY:"),
     ("GEMINI_API_KEY",          "GOOGLE GEMINI API KEY:"),
     ("GEMINI_API_KEY_ALT",      "GOOGLE GEMIINI API KEY ALT:"),
+    ("GEMINI_API_KEY_ALT2",     "GOOGLE GEMINI API KEY ALT2:"),
     ("GITHUB_MODELS_KEY",       "GITHUB MODELS API KEY:"),
     ("GITHUB_MODELS_KEY2",      "GITHUB MODELS API KEY2:"),
     ("TOGETHER_API_KEY",        "TOGETHER AI API KEY:"),
@@ -65,8 +66,10 @@ LABELS: list[tuple[str, str]] = [
     ("ANTHROPIC_API_KEY_ALT",   "ANTR_MAY2026"),
     ("DEEPSEEK_API_KEY",        "DEEPSEEK_API"),
     ("MOONSHOT_API_KEY",        "KIMI_MOONSHOT_APIKEY"),
+    ("MOONSHOT_API_KEY_ALT",    "KIMI_MOONSHOT_APIKEY2"),
     ("OPENAI_API_KEY",          "OPENAI_KEY"),
     ("QWEN_API_KEY",            "QWEN_API_KEY_PRO"),
+    ("QWEN_API_KEY_FREE",       "QWEN_API_KEY_FREE"),
     ("CHUTES_API_KEY",          "CHUTES"),
     ("LLM7_API_KEY",            "LLM7_API_KEY_FREE"),
     ("INCEPTION_API_KEY",       "INCEPTION_AI_KEY"),
@@ -105,6 +108,24 @@ def load_keys() -> dict[str, str]:
                 continue
             keys[env_name] = cand
             break
+
+    # Prefer Qwen Pro credentials from ~/.qwen/settings.json when available,
+    # mirroring runtime launcher behavior.
+    settings = Path(os.path.expanduser("~/.qwen/settings.json"))
+    if settings.exists():
+        try:
+            cfg = json.loads(settings.read_text(encoding="utf-8", errors="replace"))
+            env = cfg.get("env", {}) if isinstance(cfg, dict) else {}
+            qwen_key = (
+                env.get("BAILIAN_CODING_PLAN_API_KEY")
+                or env.get("DASHSCOPE_API_KEY")
+                or env.get("BAILIAN_TOKEN_PLAN_API_KEY")
+            )
+            if qwen_key:
+                keys["QWEN_API_KEY"] = str(qwen_key).strip()
+        except Exception:
+            pass
+
     return keys
 
 
@@ -190,7 +211,7 @@ def t_groq(key: str) -> tuple[str, str]:
 def t_gemini(key: str) -> tuple[str, str]:
     # Gemini native uses ?key= query param
     s, b = _post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={key}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}",
         {},
         {"contents": [{"parts": [{"text": PROMPT}]}], "generationConfig": {"maxOutputTokens": 50}},
     )
@@ -302,6 +323,8 @@ def t_xai(key: str) -> tuple[str, str]:
 
 def t_ollama_cloud(key: str) -> tuple[str, str]:
     # Ollama cloud uses ssh-ed25519 keys via signed JWT — REST chat at /api/chat
+    if key.strip().startswith("ssh-ed25519"):
+        return ("UNSUPPORTED", "ssh key requires JWT signing flow (not bearer)")
     s, b = _post(
         "https://ollama.com/api/chat",
         {"Authorization": f"Bearer {key}"},
@@ -342,6 +365,11 @@ def t_qwen(key: str) -> tuple[str, str]:
     return t_openai_compat("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", key, "qwen-turbo")
 
 
+def t_qwen_free(key: str) -> tuple[str, str]:
+    # Free key routed to the same intl compatible endpoint.
+    return t_openai_compat("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", key, "qwen-turbo")
+
+
 def t_chutes(key: str) -> tuple[str, str]:
     return t_openai_compat("https://llm.chutes.ai/v1/chat/completions", key, "deepseek-ai/DeepSeek-V3.2-TEE")
 
@@ -366,6 +394,7 @@ TESTS: list[tuple[str, str, Any]] = [
     ("groq",              "GROQ_API_KEY",            t_groq),
     ("gemini",            "GEMINI_API_KEY",          t_gemini),
     ("gemini (alt)",      "GEMINI_API_KEY_ALT",      t_gemini),
+    ("gemini (alt2)",     "GEMINI_API_KEY_ALT2",     t_gemini),
     ("github_models",     "GITHUB_MODELS_KEY",       t_github_models),
     ("github_models (2)", "GITHUB_MODELS_KEY2",      t_github_models),
     ("together",          "TOGETHER_API_KEY",        t_together),
@@ -383,7 +412,6 @@ TESTS: list[tuple[str, str, Any]] = [
     ("mistral",           "MISTRAL_API_KEY",         t_mistral),
     ("mistral (alt)",     "MISTRAL_API_KEY_ALT",     t_mistral),
     ("mistral (alt2)",    "MISTRAL_API_KEY_ALT2",    t_mistral),
-    ("aimlapi (free)",    "AIMLAPI_FREE_KEY",        t_aimlapi),
     ("aimlapi (paid)",    "AIMLAPI_PAID_KEY",        t_aimlapi),
     ("hypereal",          "HYPEREAL_API_KEY",        t_hypereal),
     ("hypereal (alt)",    "HYPEREAL_API_KEY_ALT",    t_hypereal),
@@ -396,8 +424,10 @@ TESTS: list[tuple[str, str, Any]] = [
     ("anthropic (alt)",   "ANTHROPIC_API_KEY_ALT",   t_anthropic),
     ("deepseek",          "DEEPSEEK_API_KEY",        t_deepseek),
     ("moonshot (kimi)",   "MOONSHOT_API_KEY",        t_moonshot),
+    ("moonshot (kimi 2)", "MOONSHOT_API_KEY_ALT",    t_moonshot),
     ("openai",            "OPENAI_API_KEY",          t_openai),
-    ("qwen",              "QWEN_API_KEY",            t_qwen),
+    ("qwen (pro)",        "QWEN_API_KEY",            t_qwen),
+    ("qwen (free)",       "QWEN_API_KEY_FREE",       t_qwen_free),
     ("chutes",            "CHUTES_API_KEY",          t_chutes),
     ("llm7",              "LLM7_API_KEY",            t_llm7),
     ("inception",         "INCEPTION_API_KEY",       t_inception),

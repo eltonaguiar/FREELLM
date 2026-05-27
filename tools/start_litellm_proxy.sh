@@ -58,11 +58,63 @@ if [[ "$ALLOW_PAID_SPILLOVER" != "0" && "$ALLOW_PAID_SPILLOVER" != "1" ]]; then
   echo "ERROR: ALLOW_PAID_SPILLOVER must be 0 or 1 (got: $ALLOW_PAID_SPILLOVER)" >&2
   exit 2
 fi
-if [[ ! -x .venv/bin/litellm ]]; then
-  echo "ERROR: .venv/bin/litellm not found; install with:" >&2
-  echo "  .venv/bin/python -m pip install 'litellm[proxy]'" >&2
-  exit 1
+
+proxy_healthy() {
+  python3 - "$PORT" << 'PY' >/dev/null 2>&1
+import sys
+import urllib.request
+
+port = sys.argv[1]
+url = f"http://127.0.0.1:{port}/health"
+try:
+    with urllib.request.urlopen(url, timeout=1.5) as resp:
+        ok = (resp.getcode() == 200)
+except Exception:
+    ok = False
+raise SystemExit(0 if ok else 1)
+PY
+}
+
+if proxy_healthy; then
+  echo "[litellm-proxy] already running on port ${PORT}; skipping restart."
+  exit 0
 fi
+
+if pgrep -f "litellm --config" >/dev/null 2>&1; then
+  echo "[litellm-proxy] litellm process already running; skipping restart."
+  exit 0
+fi
+
+ensure_litellm_runtime() {
+  if [[ -x .venv/bin/litellm ]]; then
+    return 0
+  fi
+
+  echo "[litellm-proxy] runtime missing (.venv/bin/litellm). Bootstrapping..."
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 not found in PATH; cannot bootstrap LiteLLM runtime." >&2
+    return 1
+  fi
+
+  if [[ ! -d .venv ]]; then
+    echo "[litellm-proxy] creating virtualenv: .venv"
+    python3 -m venv .venv
+  fi
+
+  echo "[litellm-proxy] installing litellm[proxy] into .venv (first run may take ~1-2 min)"
+  .venv/bin/python -m pip install --upgrade pip >/dev/null
+  .venv/bin/python -m pip install "litellm[proxy]"
+
+  if [[ ! -x .venv/bin/litellm ]]; then
+    echo "ERROR: bootstrap finished but .venv/bin/litellm still missing." >&2
+    return 1
+  fi
+
+  echo "[litellm-proxy] runtime bootstrap complete."
+}
+
+ensure_litellm_runtime
 
 # ---------------------------------------------------------------------------
 # Runtime spillover policy switch
@@ -144,6 +196,7 @@ parse_key "NVIDIA ALT KEY:"                                                     
 parse_key "GROQ FREE KEY:"                                                           GROQ_API_KEY
 parse_key "GOOGLE GEMINI API KEY:"                                                   GEMINI_API_KEY
 parse_key "GOOGLE GEMIINI API KEY ALT:"                                              GEMINI_API_KEY_ALT
+parse_key "GOOGLE GEMINI API KEY ALT2:"                                              GEMINI_API_KEY_ALT2
 parse_key "GITHUB MODELS API KEY:"                                                   GITHUB_MODELS_KEY
 parse_key "TOGETHER AI API KEY:"                                                     TOGETHER_API_KEY
 parse_key "CEREBRAS_FREE_API_KEY:"                                                   CEREBRAS_API_KEY
@@ -182,6 +235,8 @@ parse_key "ANTROPHIC"                                                           
 parse_key "ANTR_MAY2026"                                                             ANTHROPIC_API_KEY_ALT
 parse_key "DEEPSEEK_API"                                                             DEEPSEEK_API_KEY
 parse_key "KIMI_MOONSHOT_APIKEY"                                                     MOONSHOT_API_KEY
+parse_key "KIMI_MOONSHOT_APIKEY2"                                                    MOONSHOT_API_KEY_ALT
+parse_key "SAMBANOVA_API_KEY:"                                                       SAMBANOVA_API_KEY
 parse_key "OPENAI_KEY"                                                               OPENAI_API_KEY
 parse_key "QWEN_API_KEY_PRO"                                                         QWEN_API_KEY
 parse_key "CHUTES"                                                                   CHUTES_API_KEY
@@ -202,7 +257,7 @@ fi
 
 # Pre-flight: which keys did we successfully load?
 loaded=0; total=0
-for v in NVIDIA_API_KEY NVIDIA_API_KEY_ALT GROQ_API_KEY GEMINI_API_KEY GEMINI_API_KEY_ALT \
+for v in NVIDIA_API_KEY NVIDIA_API_KEY_ALT GROQ_API_KEY GEMINI_API_KEY GEMINI_API_KEY_ALT GEMINI_API_KEY_ALT2 \
          GITHUB_MODELS_KEY GITHUB_MODELS_KEY2 TOGETHER_API_KEY TOGETHER_API_KEY_ALT \
          CEREBRAS_API_KEY COHERE_API_KEY HF_API_TOKEN HF_API_TOKEN_ALT HF_API_TOKEN_READ \
          FIREWORKS_API_KEY FIREWORKS_API_KEY_ALT DEEPINFRA_API_KEY DEEPINFRA_API_KEY_ALT \
@@ -210,7 +265,7 @@ for v in NVIDIA_API_KEY NVIDIA_API_KEY_ALT GROQ_API_KEY GEMINI_API_KEY GEMINI_AP
          AIMLAPI_FREE_KEY AIMLAPI_PAID_KEY HYPEREAL_API_KEY HYPEREAL_API_KEY_ALT \
          CF_ACCOUNT_ID CF_API_TOKEN OPENROUTER_API_KEY OFOX_AI_KEY XAI_API_KEY \
          OLLAMA_CLOUD_KEY ANTHROPIC_API_KEY ANTHROPIC_API_KEY_ALT DEEPSEEK_API_KEY \
-         MOONSHOT_API_KEY OPENAI_API_KEY QWEN_API_KEY CHUTES_API_KEY LLM7_API_KEY \
+         MOONSHOT_API_KEY MOONSHOT_API_KEY_ALT OPENAI_API_KEY QWEN_API_KEY CHUTES_API_KEY LLM7_API_KEY \
          INCEPTION_API_KEY NOVITA_API_KEY CURSOR_API_KEY KILOCODE_API_KEY OPENCODE_API_KEY \
          BLUESMIND_API_KEY XAI_API_KEY_ALT GROQ_API_KEY_ALT; do
   total=$((total+1))
