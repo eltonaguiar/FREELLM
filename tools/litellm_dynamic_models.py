@@ -648,7 +648,6 @@ def _gemini_probe(key: str, model_id: str) -> tuple[bool, str]:
 #
 #   ULTRA_ALL_DAY_LONG_<FAMILY>_N   one large-context free model each, N=1..3
 #   PAID-DEEPSEEK-PRO / -FLASH      paid, latest matching id, no ULTRA prefix
-#   MERCURY                         latest Inception Mercury
 #
 # Every pin is probe-verified individually before it is emitted — the entire
 # point of a pin is reliability, so an unverified pin is worse than no pin.
@@ -672,7 +671,6 @@ PIN_SPECS: tuple[PinSpec, ...] = (
     # Paid pins: no ULTRA prefix by request — these are known-cost aliases.
     PinSpec("PAID-DEEPSEEK-PRO", "deepseek", count=1, match="pro"),
     PinSpec("PAID-DEEPSEEK-FLASH", "deepseek", count=1, match="flash"),
-    PinSpec("PAID-MERCURY", "inception", count=1),
     PinSpec("PAID-KIMI", "moonshot", count=1),
     PinSpec("PAID-GROK", "xai", count=1),
     # Cerebras: after their 2026 platform migration the free credit key works again
@@ -693,7 +691,6 @@ _PIN_SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {
     "kilo": (KILO_BASE, ("KILOCODE_API_KEY",)),
     "opencode": (OPENCODE_BASES[0], ("OPENCODE_API_KEY", "OPENCODE_API_KEY_ALT")),
     "deepseek": ("https://api.deepseek.com", ("DEEPSEEK_API_KEY",)),
-    "inception": ("https://api.inceptionlabs.ai/v1", ("INCEPTION_API_KEY",)),
     "moonshot": ("https://api.moonshot.ai/v1", ("MOONSHOT_API_KEY", "MOONSHOT_API_KEY_ALT")),
     "xai": ("https://api.x.ai/v1", ("XAI_API_KEY", "XAI_API_KEY_ALT")),
     "cerebras": ("https://api.cerebras.ai/v1", ("CEREBRAS_API_KEY", "CEREBRAS_API_KEY_ALT")),
@@ -713,7 +710,7 @@ _PIN_PREFERENCE = (
 
 
 def _version_key(model_id: str) -> tuple:
-    """Sort 'mercury-3' > 'mercury-2.5' > 'mercury-2' numerically."""
+    """Sort version suffixes numerically (e.g. '2.6' > '2.5' > '2')"""
     nums = re.findall(r"\d+(?:\.\d+)?", model_id)
     return tuple(float(n) for n in nums) if nums else (0.0,)
 
@@ -723,7 +720,7 @@ def _pin_rank(spec: PinSpec, model_id: str, ctx: int) -> tuple:
     for idx, token in enumerate(_PIN_PREFERENCE):
         if token in low:
             return (0, idx, -ctx, low)
-    if spec.provider in ("deepseek", "inception", "moonshot", "xai"):
+    if spec.provider in ("deepseek", "moonshot", "xai"):
         v = _version_key(low)
         return (0, 0, tuple(-x for x in v), low) if v else (1, 0, -ctx, low)
     return (1, 0, -ctx, low)
