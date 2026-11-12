@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,11 @@ FALLBACK_TARGETS = ("ULTRA_FREE_CLOUD", "ULTRA_FREE_CLOUD_FAST")
 
 DEFAULT_OUT_TOKENS = 8192
 HTTP_TIMEOUT = 20
+
+# Cloudflare-fronted gateways answer the default `python-requests` agent with a
+# bare 403/1010. Send a browser-shaped UA or healthy providers look dead.
+USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 
 
 def _log(msg: str) -> None:
@@ -120,7 +126,10 @@ PROVIDERS: dict[str, ProviderSpec] = {
 
 def _auth_headers(spec: ProviderSpec) -> tuple[dict[str, str], str | None]:
     key = os.environ.get(spec.key_env) if spec.key_env else None
-    return ({"Authorization": f"Bearer {key}"} if key else {}), key
+    h = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    if key:
+        h["Authorization"] = f"Bearer {key}"
+    return h, key
 
 
 def _is_free_id(mid: str) -> bool:
@@ -205,13 +214,14 @@ def discover(spec: ProviderSpec, probe: bool = True) -> tuple[list[dict[str, Any
 def _entry(model_name: str, real_id: str, api_base: str, key_env: str, rpm: int,
            ctx: int | None, out_tokens: int | None, supports_tools: bool) -> dict[str, Any]:
     params: dict[str, Any] = {
-        "model": f"openai/{real_id}",
-        "api_base": api_base,
+        "model": f"openai/{real_id}" if api_base else real_id,
         "api_key": f"os.environ/{key_env}",
         # simple-shuffle is WEIGHTED BY rpm — an entry with no rpm is effectively
         # never picked, so this field is mandatory for these to appear in rotation.
         "rpm": rpm,
     }
+    if api_base:
+        params["api_base"] = api_base
     info: dict[str, Any] = {
         "max_input_tokens": ctx or 128000,
         "max_output_tokens": out_tokens or DEFAULT_OUT_TOKENS,
@@ -236,7 +246,8 @@ def build_entries(spec: ProviderSpec, entries: list[dict[str, Any]]) -> list[dic
     return out
 
 
-def merge(base_path: Path, kilo_entries: list[dict[str, Any]], oc_entries: list[dict[str, Any]]) -> dict[str, Any]:
+def merge(base_path: Path, kilo_entries: list[dict[str, Any]], oc_entries: list[dict[str, Any]],
+          gemini_entries: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     cfg = yaml.safe_load(base_path.read_text(encoding="utf-8")) or {}
     cfg.setdefault("model_list", [])
 
@@ -247,6 +258,9 @@ def merge(base_path: Path, kilo_entries: list[dict[str, Any]], oc_entries: list[
     if oc_entries:
         cfg["model_list"].extend(oc_entries)
         added.append("ULTRA_FREE_OPENCODE")
+    if gemini_entries:
+        cfg["model_list"].extend(gemini_entries)
+        added.append("ULTRA_FREE_GEMINI")
 
     if added:
         fb = cfg.setdefault("router_settings", {}).setdefault("fallbacks", [])
@@ -259,6 +273,119 @@ def merge(base_path: Path, kilo_entries: list[dict[str, Any]], oc_entries: list[
                             current.append(group)
                     item[target] = current
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Google Gemini — one deployment per (model x key)
+#
+# Free-tier Google quotas are enforced PER MODEL PER DAY (and per model per
+# minute), not per account. A static fallback *chain* is therefore the wrong
+# shape: it burns model #1's daily allowance, fails, then moves on, and only
+# reacts after the quota is already spent.
+#
+# Registering each (model x key) pair as its own deployment inside ONE group
+# lets simple-shuffle spread load across every quota bucket simultaneously.
+# When one model caps out, the smart-cooldown parks only that one deployment
+# while its siblings keep serving.
+# ---------------------------------------------------------------------------
+GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_KEY_ENVS = ("GEMINI_API_KEY", "GEMINI_API_KEY_ALT", "GEMINI_API_KEY_ALT2", "GEMINI_NOV112026")
+GEMINI_MAX_MODELS_PER_KEY = 12          # keeps the group readable and startup fast
+_GEMINI_NON_CHAT = re.compile(r"(embedding|aqa|imagen|veo|tts|native-audio|-image)", re.I)
+
+
+def _gemini_rank(model_id: str) -> tuple[int, int, str]:
+    """Prefer flash-lite (highest free quota), then flash; avoid heavy `pro`."""
+    low = model_id.lower()
+    if "flash-lite" in low:
+        return (0, 0, low)
+    if "flash" in low:
+        return (1, 0, low)
+    if "pro" in low:
+        return (3, 0, low)
+    return (2, 0, low)
+
+
+def discover_gemini(probe: bool = True) -> list[dict[str, Any]]:
+    """Return LiteLLM deployments for every (model x key) pair we can reach."""
+    key_envs = [e for e in GEMINI_KEY_ENVS if os.environ.get(e)]
+    if not key_envs:
+        _log("gemini: no GEMINI_* env vars set — skipped")
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for env_name in key_envs:
+        key = os.environ[env_name]
+        try:
+            r = requests.get(f"{GEMINI_API}/models", params={"key": key},
+                             headers={"User-Agent": USER_AGENT}, timeout=HTTP_TIMEOUT)
+        except Exception as exc:
+            _log(f"gemini[{env_name}]: list failed ({str(exc)[:60]})")
+            continue
+        if r.status_code != 200:
+            _log(f"gemini[{env_name}]: HTTP {r.status_code} — key skipped")
+            continue
+
+        rows = (r.json() or {}).get("models") or []
+        usable = []
+        for row in rows:
+            mid = str(row.get("name") or "").split("/")[-1]
+            if not mid or _GEMINI_NON_CHAT.search(mid):
+                continue
+            methods = row.get("supportedGenerationMethods") or []
+            if "generateContent" not in methods:
+                continue
+            usable.append(row)
+        usable.sort(key=lambda x: _gemini_rank(str(x.get("name") or "")))
+        usable = usable[:GEMINI_MAX_MODELS_PER_KEY]
+        _log(f"gemini[{env_name}]: {len(rows)} listed, {len(usable)} generateContent models")
+
+        if probe and usable:
+            # Quotas are per MODEL per day, so one exhausted model says nothing
+            # about its siblings. Try up to 3 candidates before condemning a key.
+            # Only a key-wide auth failure (401/403) short-circuits.
+            passed = False
+            last = ""
+            for row in usable[:3]:
+                cand = str(row.get("name") or "").split("/")[-1]
+                ok, detail = _gemini_probe(key, cand)
+                if ok:
+                    _log(f"gemini[{env_name}]: smoke call OK via {cand}")
+                    passed = True
+                    break
+                last = f"{cand}: {detail}"
+                if detail.startswith("HTTP 401") or detail.startswith("HTTP 403"):
+                    break
+            if not passed:
+                _log(f"gemini[{env_name}]: no model could generate ({last}) — key skipped")
+                continue
+
+        for row in usable:
+            mid = str(row.get("name") or "").split("/")[-1]
+            ctx = row.get("inputTokenLimit")
+            out_tok = row.get("outputTokenLimit")
+            entries.append(_entry("ULTRA_FREE_GEMINI", f"gemini/{mid}", None,
+                                  env_name, int(os.environ.get("GEMINI_RPM", "5")),
+                                  ctx, out_tok, "tools" in " ".join(
+                                      str(x) for x in (row.get("supportedGenerationMethods") or []))))
+    return entries
+
+
+def _gemini_probe(key: str, model_id: str) -> tuple[bool, str]:
+    try:
+        r = requests.post(
+            f"{GEMINI_API}/models/{model_id}:generateContent",
+            params={"key": key},
+            json={"contents": [{"parts": [{"text": "1+1?"}]}],
+                  "generationConfig": {"maxOutputTokens": 5}},
+            headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"},
+            timeout=45,
+        )
+    except Exception as exc:
+        return False, f"error {str(exc)[:50]}"
+    if r.status_code == 200:
+        return True, "ok"
+    return False, f"HTTP {r.status_code} {r.text[:90].replace(chr(10), ' ')}"
 
 
 def verify_static(base_path: Path, workers: int = 8, timeout: int = 30,
@@ -331,7 +458,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Merge live gateway free models into a LiteLLM config")
     ap.add_argument("--base", default="litellm_config.yaml")
     ap.add_argument("--out", default="/tmp/litellm_config.dynamic.yaml")
-    ap.add_argument("--providers", default="kilo,opencode")
+    ap.add_argument("--providers", default="kilo,opencode,gemini")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-probe", action="store_true",
                     help="skip the OpenCode generation probe (may enrol non-working free models)")
@@ -350,11 +477,17 @@ def main() -> int:
     providers = [p.strip() for p in args.providers.split(",") if p.strip()]
     kilo_entries: list[dict[str, Any]] = []
     oc_entries: list[dict[str, Any]] = []
+    gemini_entries: list[dict[str, Any]] = []
 
     for pname in providers:
+        if pname == "gemini":
+            gemini_entries = discover_gemini(probe=not args.no_probe)
+            if not gemini_entries:
+                _log("gemini: nothing enrolled")
+            continue
         spec = PROVIDERS.get(pname)
         if spec is None:
-            _log(f"unknown provider '{pname}' — known: {', '.join(PROVIDERS)}")
+            _log(f"unknown provider '{pname}' — known: {', '.join(PROVIDERS)}, gemini")
             continue
         models, status = discover(spec, probe=not args.no_probe)
         if not models:
@@ -368,12 +501,13 @@ def main() -> int:
         else:
             kilo_entries = kilo_entries + built
 
-    total = len(kilo_entries) + len(oc_entries)
+    total = len(kilo_entries) + len(oc_entries) + len(gemini_entries)
     if total == 0:
         _log("no free models discovered — leaving config untouched")
         return 1
 
-    summary = [e["litellm_params"]["model"].replace("openai/", "") for e in (kilo_entries + oc_entries)]
+    summary = [e["litellm_params"]["model"].replace("openai/", "")
+               for e in (kilo_entries + oc_entries + gemini_entries)]
     if args.dry_run:
         print(json.dumps(summary, indent=2))
         return 0
@@ -383,7 +517,7 @@ def main() -> int:
         _log(f"base config not found: {base}")
         return 1
 
-    cfg = merge(base, kilo_entries, oc_entries)
+    cfg = merge(base, kilo_entries, oc_entries, gemini_entries)
     out = Path(args.out)
     out.write_text(
         "# AUTO-GENERATED by tools/litellm_dynamic_models.py — do not edit.\n"
@@ -400,6 +534,7 @@ def main() -> int:
             "groups": {
                 "ULTRA_FREE_KILO": len(kilo_entries),
                 "ULTRA_FREE_OPENCODE": len(oc_entries),
+                "ULTRA_FREE_GEMINI": len(gemini_entries),
             },
             "models": summary,
         }, indent=2), encoding="utf-8")

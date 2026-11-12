@@ -257,6 +257,32 @@ parse_key "DEEPINFRA API KEY_BEST:"                                             
 parse_key "KIMI AI API KEY part of PROJECT:"                                          KIMI_PLATFORM_API_KEY
 parse_key "OLLAMA_ALT"                                                                OLLAMA_CLOUD_TOKEN
 
+# --- Free-tier credentials present in dbpasses.txt but never exported (added 2026-11-12) ---
+# parse_key() matches the label as a WHOLE LINE, so exact spelling matters,
+# including the trailing spaces inside some labels below.
+parse_key "SILICONFLOW.com API KEY:"                                            SILICONFLOW_API_KEY
+parse_key "PUBLIC AI KEY"                                                       PUBLICAI_API_KEY
+parse_key "HYPERBOLIC API KEY :"                                                HYPERBOLIC_API_KEY
+parse_key "MODELSCOPE API KEY :"                                                MODELSCOPE_API_KEY
+parse_key "FEATHER API KEY:"                                                    FEATHERLESS_API_KEY
+parse_key "ORCAROUTER.AI"                                                       ORCAROUTER_API_KEY
+parse_key "ORCAROUTER.AI alterative key (november 2026)"                        ORCAROUTER_API_KEY_ALT
+parse_key "REQUESTY API KEY (200 free requests a day)"                          REQUESTY_API_KEY
+parse_key "ZAI_API_KEY"                                                          ZAI_API_KEY
+parse_key "ZAI_API_KEY2:"                                                        ZAI_API_KEY2
+parse_key "ZAI_API_KEY3_NOV2026:"                                                ZAI_API_KEY3
+parse_key "WAFER_API_KEY:"                                                       WAFER_API_KEY
+parse_key "VERCEL AI API KEY:"                                                   VERCEL_AI_API_KEY
+parse_key "INFRON API KEY(FREE 1000 requests a day ):"                           INFRON_API_KEY
+parse_key "INFRON API KEY ALT:"                                                  INFRON_API_KEY_ALT
+parse_key "UPSTAGE.AI API KEY"                                                   UPSTAGE_API_KEY
+parse_key "UPSTAGE.AI ALT API KEY"                                               UPSTAGE_API_KEY_ALT
+parse_key "EXA API KEY for serach"                                               EXA_API_KEY
+parse_key "EXA_API_KEY"                                                          EXA_API_KEY_ALT
+parse_key "FIRECRAWL API KEY"                                                    FIRECRAWL_API_KEY
+parse_key "AIONLABS API KEY:"                                                    AIONLABS_API_KEY
+parse_key "OPENCODE.AI API KEY test (try Big Pickle or other free models)"        OPENCODE_API_KEY_ALT
+
 # Assemble the full per-account Cloudflare Workers AI URL once so the litellm
 # config can reference $CF_API_BASE (litellm's per-provider `account_id` param
 # doesn't accept os.environ/... interpolation on the cloudflare provider).
@@ -273,7 +299,7 @@ fi
 # boot and merge the free ones into ULTRA_FREE_KILO / ULTRA_FREE_OPENCODE.
 # Fail-open: if discovery fails, we start from the static config unchanged.
 #   LITELLM_DYNAMIC_MODELS=0   disable entirely
-#   LITELLM_DYNAMIC_PROVIDERS= kilo,opencode (default)
+#   LITELLM_DYNAMIC_PROVIDERS= kilo,opencode,gemini (default)
 # ---------------------------------------------------------------------------
 if [[ "${LITELLM_DYNAMIC_MODELS:-1}" == "1" ]]; then
   PY_BIN=".venv/bin/python"
@@ -287,7 +313,7 @@ if [[ "${LITELLM_DYNAMIC_MODELS:-1}" == "1" ]]; then
   if "$PY_BIN" tools/litellm_dynamic_models.py \
         --base "$ACTIVE_CONFIG" \
         --out "$DYNAMIC_OUT" \
-        --providers "${LITELLM_DYNAMIC_PROVIDERS:-kilo,opencode}" \
+        --providers "${LITELLM_DYNAMIC_PROVIDERS:-kilo,opencode,gemini}" \
         >>"$LOG" 2>&1; then
     ACTIVE_CONFIG="$DYNAMIC_OUT"
     echo "[litellm-proxy] dynamic models: merged (+free gateway models)"

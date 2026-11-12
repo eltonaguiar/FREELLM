@@ -326,3 +326,110 @@ python3 tools/free_provider_audit.py --workers 10
 bash tools/start_litellm_proxy.sh --background
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:4000/health/readiness
 ```
+
+---
+
+## 8. UPDATE 2026-11-12 02:35Z — Gemini per-model × per-key fan-out
+
+### The insight that changed the design
+
+Google's free tier is metered **per model, per day** (and per model per minute) — *not* per account. A fallback **chain** is the wrong shape for that: it drains model #1's daily allowance, fails, then moves on, and only reacts after quota is already spent.
+
+The correct shape is to register **each (model × key) pair as its own deployment inside one group**. `simple-shuffle` then spreads load across every quota bucket simultaneously, and when one model caps out the smart-cooldown parks *only that deployment* while its siblings keep serving.
+
+Implemented as `discover_gemini()` in `tools/litellm_dynamic_models.py` → new group **`ULTRA_FREE_GEMINI`**, appended to the strict-free fallback graph.
+
+```python
+GEMINI_KEY_ENVS = ("GEMINI_API_KEY", "GEMINI_API_KEY_ALT", "GEMINI_API_KEY_ALT2", "GEMINI_NOV112026")
+GEMINI_MAX_MODELS_PER_KEY = 12      # flash-lite ranked first (highest free quota)
+```
+
+Discovery uses Google's native catalogue (`/v1beta/models`) rather than the OpenAI-compat shim, because only the native endpoint exposes `supportedGenerationMethods` and `inputTokenLimit`:
+
+- keep only rows whose `supportedGenerationMethods` contains `generateContent`
+- drop non-chat families (`embedding|aqa|imagen|veo|tts|native-audio|-image`)
+- rank `flash-lite` > `flash` > other > `pro`; cap at 12 models per key
+- `model_info.max_input_tokens` ← `inputTokenLimit`, `max_output_tokens` ← `outputTokenLimit`
+
+### A gate refinement that mattered
+
+First implementation probed **one** model per key and skipped the whole key on failure. That is wrong for this provider: a single exhausted model says nothing about its 11 siblings. Result of the naive version — 2 of 3 keys discarded:
+
+```
+gemini[GEMINI_API_KEY]:      smoke call OK via gemini-2.5-flash-lite
+gemini[GEMINI_API_KEY_ALT]:  smoke call failed (HTTP 429 ...) — key skipped
+gemini[GEMINI_API_KEY_ALT2]: smoke call failed (HTTP 429 ...) — key skipped
+```
+
+With per-model retry (up to 3 candidates; only 401/403 short-circuits the key), all three keys pass and the pool triples:
+
+```
+gemini[GEMINI_API_KEY]:      smoke call OK via gemini-3.1-flash-lite
+gemini[GEMINI_API_KEY_ALT]:  smoke call OK via gemini-2.5-flash-lite
+gemini[GEMINI_API_KEY_ALT2]: smoke call OK via gemini-3.1-flash-lite
+→ 36 deployments (12 models × 3 keys)
+```
+
+**Lesson:** "one 429 = provider dead" is the same class of error as "catalog 200 = provider alive". Both over-trust a single observation.
+
+### Verified live
+
+```
+$ curl -s http://localhost:4000/v1/models            → 19 groups
+dynamic: ['ULTRA_FREE_GEMINI', 'ULTRA_FREE_KILO']
+
+$ POST /v1/chat/completions {"model":"ULTRA_FREE_GEMINI", ...}
+content= 'GEMINI-UP'   finish= stop
+x-litellm-model-api-base: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent
+```
+
+### Bug found in my own wiring (why the group was initially missing)
+
+`tools/start_litellm_proxy.sh` passes an explicit `--providers` flag which **overrides** the Python default:
+
+```bash
+--providers "${LITELLM_DYNAMIC_PROVIDERS:-kilo,opencode}"     # ← stale
+--providers "${LITELLM_DYNAMIC_PROVIDERS:-kilo,opencode,gemini}"  # fixed
+```
+
+Changing a CLI default in Python is not enough when the caller supplies the flag. Always verify the **live** group list, not the code.
+
+---
+
+## 9. Collaboration & conflict audit — Freebuff
+
+Freebuff published `FREEBUFF_NOV112026.MD` and `FREEBUFF_PLAN_NOV112026.MD` at commit `ce495dfb`. Both docs are additive; I read them before re-editing anything.
+
+### Their work that landed in the tree (not duplicated by me)
+
+| Change | Status |
+|---|---|
+| NVIDIA `nvidia_nim/meta/llama-3.1-8b-instruct` → `…llama-3.2-90b-vision-instruct` (all 5 deployments) | **already applied** — independently the exact model I had verified as HTTP 200 |
+| GitHub Models base `models.inference.ai.azure.com` → `models.github.ai/inference` | **already applied** — I had independently confirmed old host is DNS-dead (`000`) and new one returns `200` |
+| Launcher idempotency guard (`proxy_healthy` + `pgrep` "already running") | their edit, kept |
+
+### No group-name collision
+
+Their generated groups are `DYNAMIC_FREE*`; mine are `ULTRA_FREE_KILO` / `ULTRA_FREE_GEMINI` / `ULTRA_FREE_OPENCODE`. Confirmed `grep -c DYNAMIC_FREE litellm_config.yaml` → **0** — their pool is validated but **not activated** on `:4000` (they tested a second instance on `:4001`). Both can coexist; if we activate both, `DYNAMIC_FREE*` and `ULTRA_FREE_*` will overlap in *content* but not in name, so review for duplicate deployments before merging.
+
+### Where we disagree — and how to resolve it
+
+1. **"Kilo anonymous is no longer keyless (401 without a key)."**
+   They tested `api.kilo.ai/api/gateway/v1` and `kilocode.ai/api/openrouter`. My pipeline uses **`https://ai-gateway.kilo.ai/api/v1`**, which still answers anonymous (`200`) and returns 11 `:free` models — re-verified live this session, and `_probe_generation()` refuses to enrol anything that does not generate.
+   **Resolution: different hostnames behave differently.** Do not generalise "anonymous is dead" from one base URL. The probe decides per base.
+2. **"NVIDIA: key authenticates, 84 listed, invokes 410/404; 1 of 84 answered (slow)."**
+   Consistent with my finding. The one that answered is `meta/llama-3.2-90b-vision-instruct` (HTTP 200, `content='OK'`). Their read — that `nvidia/nemotron-3-ultra-550b-a55b:free` is supplied by **OpenRouter/Kilo, not NVIDIA NIM** — is correct and important: the quota belongs to the gateway, not to NVIDIA.
+3. **Their Cloudflare `1010` finding** matches the User-Agent bug I hit independently; both tools now send a browser UA.
+
+### Conflict hazard I introduced and fixed
+
+`pgrep -f "litellm --config"` **self-matches the invoking shell** when the pattern text appears in the same command line. That made the new guard report "already running" while nothing was running, and my `pkill`/wait loop in the same command string also matched itself. Symptom: launcher prints *"litellm process already running; skipping restart"* and `readiness=000`.
+
+Rule going forward: never combine `pkill -f <pattern>` / `pgrep -f <pattern>` with the launcher invocation in one command string. Kill in one call, start in another.
+
+### Still open (unchanged from their plan)
+
+- Hot sync without restart (`store_model_in_db` + `/model/new` / PATCH / DELETE). **Not implemented.** Both current paths still require a restart. I have not verified the endpoint behaviour on this LiteLLM build, so I am not claiming it works.
+- Last-good cache so a failed discovery run cannot empty a group. Designed, **not yet implemented**.
+- Dedupe of the same underlying model offered by several gateways (prefer direct provider → Kilo → OpenCode). **Not implemented.**
+

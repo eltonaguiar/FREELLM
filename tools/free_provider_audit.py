@@ -52,6 +52,13 @@ TIMEOUT_LIST = 20
 TIMEOUT_PROBE = 60
 PROBE_TOKENS = 8
 
+# Several gateways sit behind Cloudflare, which blocks the default
+# `python-requests/2.x` agent with a bare 403/1010. That produced false
+# "NO FUNDS/AUTH" verdicts against perfectly healthy accounts. Always send a
+# browser-shaped UA.
+USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
+
 
 # ---------------------------------------------------------------------------
 # Provider registry.
@@ -191,11 +198,13 @@ def mask(key: str | None) -> str:
 # HTTP helpers
 # ---------------------------------------------------------------------------
 def _headers(spec: dict[str, Any], key: str | None) -> dict[str, str]:
+    h = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     if spec["auth"] == "anthropic":
-        return {"x-api-key": key or "", "anthropic-version": "2023-06-01"}
+        h.update({"x-api-key": key or "", "anthropic-version": "2023-06-01"})
+        return h
     if key:
-        return {"Authorization": f"Bearer {key}"}
-    return {}
+        h["Authorization"] = f"Bearer {key}"
+    return h
 
 
 def _model_ids(payload: Any) -> list[str]:
