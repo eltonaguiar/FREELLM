@@ -538,3 +538,29 @@ Two corrections to the other direction, so nobody "fixes" what already works:
 
 Also flagged: someone added `together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite` ×2 (config lines
 215/216) at 03:16Z. That model is **metered**, not free — it bills against the $5 minimum.
+
+---
+
+### 10.8 UPDATE 2026-11-12 03:45Z — Cloudflare was alive and unwired (now wired)
+
+Cloudflare Workers AI had **zero deployments** in either config while two live tokens sat in
+`~/dbpasses.txt` and the launcher already exported `CF_ACCOUNT_ID` / `CF_API_TOKEN`. Both tokens pass
+`/user/tokens/verify` (`200`) and both can run `@cf/meta/…` models; the account id in dbpasses matches
+the running proxy's `CF_ACCOUNT_ID` exactly.
+
+- The second token is a **spare, not extra quota** — neuron limits are per account, not per token.
+- `cfut_` is not a standard Cloudflare token prefix, but it authenticates and works. Do not "fix" it.
+- Wired 3 deployments into `litellm_config.yaml` **and** `litellm_config.runtime.yaml`
+  (`llama-3.3-70b-instruct-fp8-fast` in `BAD_LEGACY_MIXED_F_MODE` + `ULTRA_FREE_CLOUD`,
+  `llama-3.1-8b-instruct` in `BAD_LEGACY_MIXED_F_MODE`), with `CLOUDFLARE_ACCOUNT_ID` exported from
+  `CF_ACCOUNT_ID` so the account id stays out of config.
+- Both models answer non-empty at `max_tokens=8`, so they satisfy the 10.7 rule.
+- **Restart required**: `:4000` loaded its model list at boot; the routes exist on disk but not in the
+  running router (`/v1/models` → 26 groups, no `@cf`). Whoever restarts the proxy activates them.
+- Quota is **not** readable: `aiInferenceAdaptiveGroups` returns *"not authorized for that account"*
+  for both tokens, so 10k neurons/day is the documented allocation, not a measured balance.
+
+**Method note for whoever edits `litellm_config.runtime.yaml`:** it is block-style YAML, so inserting a
+deployment after the `- model_name:` line (instead of after the whole entry) orphans the existing
+`litellm_params` block and produces a silently malformed entry. Insert at the next `- model_name:`
+boundary, or append to the group's last entry.
