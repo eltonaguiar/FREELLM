@@ -585,3 +585,43 @@ fully spent. That is the 10.7 reasoning-model trap landing in production shape �
 `openrouter/*:free` reasoning models think until the cap and answer nothing. Callers with small
 `max_tokens` will occasionally get an empty string with a `200`; either raise the floor or move
 reasoning-only models behind an explicit selector.
+
+---
+
+### 10.9 CORRECTION 2026-11-12 04:15Z — Mistral's free tier is REAL; my 10.2 entry was wrong
+
+Second-pass verification of six providers another agent proposed. Correcting the record first:
+
+**Mistral Free mode works on our existing keys.** It is the default state for new accounts, no card.
+Limits are unpublished (console → API → Limits), and — critically — they are **per model**:
+
+```
+open-mistral-nemo        200   limit_req/min=2   40000 tok/min
+codestral-latest         200   limit_req/min=2   40000 tok/min
+ministral-3b/8b/14b      200   limit_req/min=2   40000 tok/min
+mistral-small-latest     429   limit_req/min=0
+mistral-medium-latest    429   limit_req/min=0
+magistral-medium-latest  429   limit_req/min=0
+```
+
+The `429`s are `limit_req/min=0`, i.e. that model is not on the free tier — **not** "no API access",
+which is what 10.2 claimed. Withdrawn. "60 RPM / 500K TPM" is the paid Scale figure; free keys get
+**2 req/min and 40K tok/min** on nemo/codestral/ministral only.
+
+Acted on: the 5 `mistral/mistral-small-latest` deployments (limit 0, guaranteed 429) were replaced with
+`mistral/codestral-latest`, and `codestral-latest` (ALT2 key) + `ministral-8b-latest` (primary key) were
+added to `ULTRA_FREE_CLOUD` at `rpm: 2`. Both verified through `litellm.completion` before wiring.
+
+**The other five, verified:**
+
+| Provider | Reality now | Verdict |
+|---|---|---|
+| SambaNova | catalog 200, but **every model 402 `PAYMENT_METHOD_REQUIRED`, `balance_units: 0`**; docs' 20 RPM/20 RPD free tier needs no linked card, console since Aug 2026 requires one | dead, drop |
+| Novita | 99 models, Ling-3.0 Flash Fin/Sante/VL listed **$0 in/$0 out**, yet calls return **403 `NOT_ENOUGH_BALANCE`** | gated, needs balance |
+| Requesty | free tier real (200/day, 20/min, ~12 free ids, no card) but **our org is 402 "balance is too low" on every free model** | needs a fresh free-plan account |
+| DeepInfra | **no free tier** (card or prepay required); `API KEY` is 401, but **`_ALT` and `_BEST` carry paid credit** and answer `'ok'` on Ling-3.0-flash-VL / GLM-5.3 / Inkling-Small | paid fallback only |
+| Pollinations | keyless, works, **wired** (1 reply / 30 s per IP; its `402` = FREE_LIMIT, not billing) | wired |
+| OVHcloud | anonymous raw calls work (`gpt-oss-20b`, `Mistral-Small-3.2`) but **LiteLLM injects `Authorization: Bearer` and OVH 403s** — not wireable without a header-stripping hop | skip |
+
+`litellm_config.yaml` 166 entries / `runtime` 225, 0 malformed, 3 Cloudflare + 1 Pollinations route,
+`ULTRA_FREE_CLOUD` at 14. Restart still needed for any of it to reach the running `:4000`.
