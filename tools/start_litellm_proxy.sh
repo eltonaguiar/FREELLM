@@ -162,10 +162,10 @@ parse_key() {
   # $1=label, $2=env_var_to_set
   local label="$1" env="$2"
   local val
-  # Trim trailing whitespace on both label-from-file and current line so
-  # entries like "NOUS API KEY (USE ONLY FREE MODELS): " (trailing space)
-  # still match the bare label we pass in. Without this, parse_key silently
-  # drops keys whose label line has trailing whitespace.
+  # Trim BOTH leading and trailing whitespace so labels under sections like
+  # "==PAID_APIS==" (which are indented with 2 spaces: "  XIAOMI_MIMO_TOKEN_PLAN",
+  # "  ANTROPHIC") still match the bare labels passed to parse_key.
+  # Also handles trailing spaces on labels like "NOUS API KEY ...: ".
   # Smart-skip sub-label lines after the main label. The file has patterns like
   #   GROK:
   #   GROK_SUPER             ← header, NOT the key
@@ -176,7 +176,7 @@ parse_key() {
   #   - NOT ending in ':' (skips continuation labels)
   #   - NOT a URL (skips https://hypereal.cloud/-style annotation lines)
   val="$(awk -v lbl="$label" '
-    { line=$0; sub(/[[:space:]]+$/, "", line) }
+    { line=$0; gsub(/^[ \t]+|[ \t]+$/, "", line) }
     line == lbl { found=1; next }
     found && NF > 0 {
       if (line ~ /^[A-Z][A-Z0-9_]*$/) next
@@ -234,6 +234,7 @@ parse_key "OLLAMA_CLOUD_KEY"                                                    
 parse_key "ANTROPHIC"                                                                ANTHROPIC_API_KEY
 parse_key "ANTR_MAY2026"                                                             ANTHROPIC_API_KEY_ALT
 parse_key "DEEPSEEK_API"                                                             DEEPSEEK_API_KEY
+parse_key "XIAOMI_MIMO_TOKEN_PLAN"                                                   XIAOMI_MIMO_TOKEN_PLAN
 parse_key "KIMI_MOONSHOT_APIKEY"                                                     MOONSHOT_API_KEY
 parse_key "KIMI_MOONSHOT_APIKEY2"                                                    MOONSHOT_API_KEY_ALT
 parse_key "SAMBANOVA_API_KEY:"                                                       SAMBANOVA_API_KEY
@@ -246,13 +247,53 @@ parse_key "NOVITA API KEY:"                                                     
 parse_key "CURSOR_API_KEY"                                                           CURSOR_API_KEY
 parse_key "KILOCODE_API_KEY"                                                         KILOCODE_API_KEY
 parse_key "OPENCODE_API_KEY"                                                         OPENCODE_API_KEY
+# The 'OPENCODE_API_KEY' label above holds a DEAD key (api_key_expired, verified
+# 2026-11-12). The live OpenCode Zen credential is filed under a different label
+# belonging to the same account. parse_key() matches whole lines, so this does
+# not collide with "OPENAI_KEY". Added AFTER the stale line so it wins.
+parse_key "OPENAI_KEY_NOV112026"                                                     OPENCODE_API_KEY
 parse_key "BLUESMIND API KEY"                                                        BLUESMIND_API_KEY
+parse_key "DEEPINFRA API KEY_BEST:"                                                   DEEPINFRA_API_KEY_BEST
+parse_key "KIMI AI API KEY part of PROJECT:"                                          KIMI_PLATFORM_API_KEY
+parse_key "OLLAMA_ALT"                                                                OLLAMA_CLOUD_TOKEN
 
 # Assemble the full per-account Cloudflare Workers AI URL once so the litellm
 # config can reference $CF_API_BASE (litellm's per-provider `account_id` param
 # doesn't accept os.environ/... interpolation on the cloudflare provider).
 if [[ -n "${CF_ACCOUNT_ID:-}" ]]; then
   export CF_API_BASE="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1"
+fi
+
+# ---------------------------------------------------------------------------
+# Dynamic free-model discovery (run on every start)
+#
+# Hardcoded model IDs rot: `nvidia_nim/meta/llama-3.1-8b-instruct` was retired
+# 2026-08-26 and returned HTTP 410 for months while the config still listed it.
+# Gateway catalogs (Kilo, OpenCode) are always current, so we re-read them at
+# boot and merge the free ones into ULTRA_FREE_KILO / ULTRA_FREE_OPENCODE.
+# Fail-open: if discovery fails, we start from the static config unchanged.
+#   LITELLM_DYNAMIC_MODELS=0   disable entirely
+#   LITELLM_DYNAMIC_PROVIDERS= kilo,opencode (default)
+# ---------------------------------------------------------------------------
+if [[ "${LITELLM_DYNAMIC_MODELS:-1}" == "1" ]]; then
+  PY_BIN=".venv/bin/python"
+  [[ -x "$PY_BIN" ]] || PY_BIN="python3"
+  # IMPORTANT: the merged config must live in the repo root, not /tmp. LiteLLM
+  # resolves `callbacks: tools.xxx.yyy` relative to the CONFIG FILE's directory,
+  # so a /tmp config makes the callback import fail and the proxy exits.
+  DYNAMIC_OUT="$PWD/litellm_config.runtime.yaml"
+  # Belt and braces for the same resolution path.
+  export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+  if "$PY_BIN" tools/litellm_dynamic_models.py \
+        --base "$ACTIVE_CONFIG" \
+        --out "$DYNAMIC_OUT" \
+        --providers "${LITELLM_DYNAMIC_PROVIDERS:-kilo,opencode}" \
+        >>"$LOG" 2>&1; then
+    ACTIVE_CONFIG="$DYNAMIC_OUT"
+    echo "[litellm-proxy] dynamic models: merged (+free gateway models)"
+  else
+    echo "[litellm-proxy] dynamic models: skipped (kept static config)"
+  fi
 fi
 
 # Pre-flight: which keys did we successfully load?
@@ -267,9 +308,13 @@ for v in NVIDIA_API_KEY NVIDIA_API_KEY_ALT GROQ_API_KEY GEMINI_API_KEY GEMINI_AP
          OLLAMA_CLOUD_KEY ANTHROPIC_API_KEY ANTHROPIC_API_KEY_ALT DEEPSEEK_API_KEY \
          MOONSHOT_API_KEY MOONSHOT_API_KEY_ALT OPENAI_API_KEY QWEN_API_KEY CHUTES_API_KEY LLM7_API_KEY \
          INCEPTION_API_KEY NOVITA_API_KEY CURSOR_API_KEY KILOCODE_API_KEY OPENCODE_API_KEY \
-         BLUESMIND_API_KEY XAI_API_KEY_ALT GROQ_API_KEY_ALT; do
+         BLUESMIND_API_KEY XAI_API_KEY_ALT GROQ_API_KEY_ALT \
+         DEEPINFRA_API_KEY_BEST KIMI_PLATFORM_API_KEY OLLAMA_CLOUD_TOKEN; do
   total=$((total+1))
-  if [[ -n "${!v:-}" ]]; then loaded=$((loaded+1)); fi
+  # `-v` tests whether the variable named by $v is set. The old `${!v:-}` form is
+  # rejected by bash ("invalid variable name") because indirect expansion cannot
+  # be combined with a default value — and under `set -e` it aborted the launch.
+  if [[ -v $v ]]; then loaded=$((loaded+1)); fi
 done
 echo "[litellm-proxy] keys loaded: $loaded / $total"
 echo "[litellm-proxy] config: $ACTIVE_CONFIG"
@@ -299,6 +344,12 @@ if [[ $BG -eq 1 ]]; then
   record_restart "$PID"
   echo "[litellm-proxy] PID: $PID  (kill with: kill $PID)"
   echo "[litellm-proxy] tail -f $LOG  to watch"
+  # Preload the latency-first local group so its first request is not a cold
+  # model load (3-23s measured). Non-fatal and detached: ollama may be absent.
+  if [[ "${WARM_LOCAL_FAST:-1}" == "1" && -f tools/warm_litellm_local_fast.sh ]]; then
+    nohup bash tools/warm_litellm_local_fast.sh --config "$ACTIVE_CONFIG" \
+      > /tmp/litellm_warm.log 2>&1 &
+  fi
 else
   record_restart "$$"
   exec .venv/bin/litellm --config "$ACTIVE_CONFIG" --port "$PORT" --num_workers 1

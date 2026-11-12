@@ -1,35 +1,6 @@
-# Secrets — MUST NEVER enter git
-dbpasses.txt
-.env
-.env.local
-.env.*.local
-
-# Python
+litellm_config.runtime.yaml
+.config_backups/
 __pycache__/
 *.pyc
-*.pyo
-.venv/
-venv/
-*.egg-info/
-dist/
-build/
-
-# Runtime / tmp
-/tmp/*
-!/.gitkeep
-
-# Proxy artifacts
-logs/
-/tmp/litellm_proxy.log
-/tmp/litellm_cooldown_state.json
-/tmp/litellm_restart_history.jsonl
-
-# Local spend ledger (sensitive usage/cost telemetry)
-.local/spend/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+dbpasses.txt
+.env

@@ -1,8 +1,9 @@
-# litellm proxy config — FREE-mode + PAID-mode rotating fallback.
+# LiteLLM proxy config: strict free selectors, preserved legacy pools, and paid pools.
 #
-# Two virtual model names: free-mode (only $0 / free-tier upstreams), paid-mode
-# (premium frontier models). hybrid-model is preserved as a free-mode alias for
-# backward compatibility with existing Roo/Kilo settings.
+# `ULTRA_FREE_CLOUD*` are strict free-only selectors. The former mixed pools are
+# preserved under `BAD_LEGACY_MIXED_F_MODE*` and are NOT a zero-cost contract.
+# `ULTRA_*` aliases expose the curated recommendations explicitly. `ULTRA_HYBRID_MODEL`
+# remains a backward-compatible mixed alias.
 #
 # Verified alive 2026-05-25 via tools/verify_all_keys.py (27/43 keys OK).
 #
@@ -17,7 +18,7 @@
 #   aimlapi (free)  — ALL_TIME_LIMIT exhausted (paid key works)
 #   hf (any)        — monthly account-pool credits depleted (smart_cooldown parks)
 #   cloudflare      — daily 10k-neuron quota (smart_cooldown parks until UTC midnight)
-#   openai          — out of quota; left as paid-mode entry so it surfaces if topped up
+#   openai          — out of quota; left as ULTRA_PAID_MODE entry so it surfaces if topped up
 #   novita          — key valid but current account has NOT_ENOUGH_BALANCE; supported as direct alias only
 
 litellm_settings:
@@ -34,24 +35,30 @@ router_settings:
   cooldown_time: 65
   retry_after: 1
   context_window_fallbacks:
-    - free-mode: ["free-mode-large"]
-    - hybrid-model: ["free-mode-large"]
-    - paid-mode: ["paid-mode-large", "free-mode-large"]
+    - ULTRA_FREE_CLOUD: ["ULTRA_FREE_CLOUD_LARGE"]
+    - ULTRA_HYBRID_MODEL: ["ULTRA_FREE_CLOUD_LARGE"]
+    - ULTRA_PAID_MODE: ["ULTRA_PAID_MODE_LARGE", "ULTRA_FREE_CLOUD_LARGE"]
   fallbacks:
     # Generic fallbacks — catch any failure (incl. 413, mid-stream 429, etc.)
-    # not just ContextWindowExceededError. Every group needs at least one
-    # fallback target or LiteLLM surfaces the upstream error directly.
-    - hybrid-model:      ["free-mode-large", "free-mode", "paid-mode"]
-    - free-mode:         ["free-mode-large", "paid-mode"]
-    - free-mode-large:   ["paid-mode-large", "paid-mode", "free-mode"]
-    - paid-mode:         ["paid-mode-large", "free-mode-large", "free-mode"]
-    - paid-mode-large:   ["free-mode-large", "paid-mode", "free-mode"]
+    # not just ContextWindowExceededError. Strict free groups only fall back
+    # to other strict free groups; local-only groups fail closed.
+    - ULTRA_HYBRID_MODEL:      ["ULTRA_FREE_CLOUD_LARGE", "ULTRA_FREE_CLOUD", "ULTRA_PAID_MODE"]
+    # Free-named aliases are now strict zero-cost pools; spillover stays free.
+    - ULTRA_FREE_CLOUD:         ["ULTRA_FREE_CLOUD_LARGE"]
+    # A broken long-context stream can retry on the free, tool-capable pool.
+    # This target has no fallback of its own, avoiding a cycle or paid spillover.
+    - ULTRA_FREE_CLOUD_LARGE: ["ULTRA_FREE_CLOUD_TOOLS"]
+    - ULTRA_PAID_MODE:         ["ULTRA_PAID_MODE_LARGE", "ULTRA_FREE_CLOUD_LARGE", "ULTRA_FREE_CLOUD"]
+    - ULTRA_PAID_MODE_LARGE:   ["ULTRA_FREE_CLOUD_LARGE", "ULTRA_PAID_MODE", "ULTRA_FREE_CLOUD"]
     # Fast modes — narrow pools, fall back to their full-tier siblings
     # if every fast upstream is cooled. Keeps latency goal as primary
     # but doesn't fail the request when all fast are exhausted.
-    - free-mode-fast:    ["free-mode", "free-mode-large", "paid-mode-fast"]
-    - paid-mode-fast:    ["paid-mode", "free-mode-fast", "free-mode"]
-    - free-mode-tools:   ["paid-mode-fast", "paid-mode", "free-mode-fast"]   # tool-safe escalates to paid-fast first to preserve parallel-tool semantics
+    - ULTRA_PAID_MODE_FAST:    ["ULTRA_PAID_MODE", "ULTRA_FREE_CLOUD_FAST", "ULTRA_FREE_CLOUD"]
+    - ULTRA_FREE_CLOUD_FAST:    ["ULTRA_FREE_CLOUD", "ULTRA_FREE_CLOUD_LARGE"]
+    # ULTRA_FREE_TOOLS_FAST — latency-first local pool; falls back to the
+    # slower local pool only (never cloud, so it cannot silently bill).
+    - ULTRA_FREE_TOOLS_FAST: ["ULTRA_FREE_TOOLS"]
+    # Strict selector fallbacks. These never reach a paid group.
   retry_policy:
     BadRequestErrorRetries: 1
     AuthenticationErrorRetries: 0
@@ -62,104 +69,212 @@ router_settings:
 
 model_list:
   # ====================================================================
-  # FREE MODE — verified $0 / free-tier upstreams (18 entries)
+  # Xiaomi Mimo — paid token plan (token-plan-sgp). Uses current live model IDs
+  # (mimo-v2.5-pro etc). The old "xiaomi-mimo-v1" alias was removed by provider.
+  # Added 2026-05-28, refreshed 2026-05-28.
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/mimo-v2.5-pro, api_key: os.environ/XIAOMI_MIMO_TOKEN_PLAN, api_base: https://token-plan-sgp.xiaomimimo.com/v1}}
+  # BAD_LEGACY_MIXED_F_MODE — NOT A ZERO-COST GUARANTEE; retained for opt-in compatibility.
+  # Retained for existing clients; use the strict ULTRA_FREE_LOCAL/ULTRA_FREE_CLOUD groups
+  # below for new clients that must not reach paid or trial-credit endpoints.
   # ====================================================================
-  - {model_name: free-mode, litellm_params: {model: groq/llama-3.1-8b-instant, api_key: os.environ/GROQ_API_KEY}}
-  - {model_name: free-mode, litellm_params: {model: groq/llama-3.1-8b-instant, api_key: os.environ/GROQ_API_KEY_ALT}}
+  # --- FREE FRONTIER: OpenRouter :free, added 2026-11-11 ------------------
+  # Every entry below was verified with a live chat call (HTTP 200, cost 0)
+  # before being wired — see reports/free_model_route_probe_2026-11-11.json.
+  # Ranked by operator priority: capability class first, then speed / context /
+  # tool support. `weight` matters because routing_strategy is simple-shuffle:
+  # a deployment with no weight gets 1, so these weights give the strongest
+  # free model the largest share instead of an equal one.
+  # `provider.max_price {prompt:0, completion:0}` is the $0 guard — OpenRouter
+  # refuses a paid upstream, so a mistagged ":free" can never produce a bill.
+  #   5  nemotron-3-ultra-550b-a55b   — 1M ctx, frontier-scale reasoning (~5.4 s)
+  #   4  baidu/ernie-5.5-flash-preview — fastest large-context of the set (0.84 s)
+  #   3  cohere/north-mini-code       — code-specialised (0.21 s)
+  #   2  recursive/flint-v1.0         — general, small (0.31 s)
+  #   1  liquid/lfm-3-1.7b            — 1.7B filler (0.31 s)
+  - model_name: BAD_LEGACY_MIXED_F_MODE
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 5
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+  - model_name: BAD_LEGACY_MIXED_F_MODE
+    litellm_params:
+      model: openrouter/baidu/ernie-5.5-flash-preview:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 4
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+  - model_name: BAD_LEGACY_MIXED_F_MODE
+    litellm_params:
+      model: openrouter/cohere/north-mini-code:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 3
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+  - model_name: BAD_LEGACY_MIXED_F_MODE
+    litellm_params:
+      model: openrouter/recursive/flint-v1.0:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 2
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+  - model_name: BAD_LEGACY_MIXED_F_MODE
+    litellm_params:
+      model: openrouter/liquid/lfm-3-1.7b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 1
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
 
-  - {model_name: free-mode, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY,     api_base: https://integrate.api.nvidia.com/v1}}
-  - {model_name: free-mode, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY_ALT, api_base: https://integrate.api.nvidia.com/v1}}
+  # Groq free plan, 262K context. Already reachable as the XX_groq direct
+  # alias; promoted into the rotation so ULTRA_FREE_CLOUD can actually pick it.
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: groq/qwen/qwen3.8-27b, api_key: os.environ/GROQ_API_KEY_ALT, weight: 4}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: groq/qwen/qwen3.8-27b, api_key: os.environ/GROQ_API_KEY,     weight: 3}}
+
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: groq/llama-3.1-8b-instant, api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: groq/llama-3.1-8b-instant, api_key: os.environ/GROQ_API_KEY_ALT}}
+
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY,     api_base: https://integrate.api.nvidia.com/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY_ALT, api_base: https://integrate.api.nvidia.com/v1}}
 
   # Google model limits (from dashboard) are enforced per deployment via rpm.
   # Router pre-call checks + cooldown rotate first, then wait for next window.
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-3-flash-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemma-4-26b-a4b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemma-4-31b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_NOV112026, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-3-flash-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemma-4-26b-a4b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  # PARKED 2026-11-06: free-tier TPM for gemma-4-31b is 16k input tokens/min, so any
+  # real prompt 429s and the router then surfaces Vertex errors on ULTRA_PAID_MODE fallbacks.
+  # Restore by uncommenting once the key is on a paid tier.
+  # - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemma-4-31b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
   # Requested additions: currently quota-gated in direct checks; keep low rpm
   # so router can try them opportunistically without causing noisy churn.
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.0-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: free-mode, litellm_params: {model: gemini/gemini-2.0-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: free-mode, litellm_params: {model: cohere/command-r7b-12-2024, api_key: os.environ/COHERE_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-3.8-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: cohere/command-r7b-12-2024, api_key: os.environ/COHERE_API_KEY}}
 
-  - {model_name: free-mode, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY,  api_base: https://models.inference.ai.azure.com}}
-  - {model_name: free-mode, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY2, api_base: https://models.inference.ai.azure.com}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY,  api_base: https://models.inference.ai.azure.com}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY2, api_base: https://models.inference.ai.azure.com}}
 
-  - {model_name: free-mode, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY}}
-  - {model_name: free-mode, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY_ALT}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY_ALT}}
 
-  - {model_name: free-mode, litellm_params: {model: openai/meta-llama/Meta-Llama-3.1-8B-Instruct, api_key: os.environ/DEEPINFRA_API_KEY_ALT, api_base: https://api.deepinfra.com/v1/openai}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/meta-llama/Meta-Llama-3.1-8B-Instruct, api_key: os.environ/DEEPINFRA_API_KEY_ALT, api_base: https://api.deepinfra.com/v1/openai}}
 
-  - {model_name: free-mode, litellm_params: {model: openai/deepseek/deepseek-v4-flash:free, api_key: os.environ/NOUS_API_KEY,     api_base: https://inference-api.nousresearch.com/v1}}
-  - {model_name: free-mode, litellm_params: {model: openai/deepseek/deepseek-v4-flash:free, api_key: os.environ/NOUS_API_KEY_ALT, api_base: https://inference-api.nousresearch.com/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/deepseek/deepseek-v4-flash:free, api_key: os.environ/NOUS_API_KEY,     api_base: https://inference-api.nousresearch.com/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/deepseek/deepseek-v4-flash:free, api_key: os.environ/NOUS_API_KEY_ALT, api_base: https://inference-api.nousresearch.com/v1}}
 
-  - {model_name: free-mode, litellm_params: {model: mistral/mistral-small-latest, api_key: os.environ/MISTRAL_API_KEY}}
-  - {model_name: free-mode, litellm_params: {model: mistral/mistral-small-latest, api_key: os.environ/MISTRAL_API_KEY_ALT}}
-  - {model_name: free-mode, litellm_params: {model: mistral/mistral-small-latest, api_key: os.environ/MISTRAL_API_KEY_ALT2}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: mistral/mistral-small-latest, api_key: os.environ/MISTRAL_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: mistral/mistral-small-latest, api_key: os.environ/MISTRAL_API_KEY_ALT}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: mistral/mistral-small-latest, api_key: os.environ/MISTRAL_API_KEY_ALT2}}
 
-  - {model_name: free-mode, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
-  - {model_name: free-mode, litellm_params: {model: openai/z-ai/glm-4.7-flash:free, api_key: os.environ/OFOX_AI_KEY, api_base: https://api.ofox.ai/v1}}
-  - {model_name: free-mode, litellm_params: {model: openai/gpt-4o-mini-2024-07-18, api_key: os.environ/LLM7_API_KEY, api_base: https://api.llm7.io/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/z-ai/glm-4.7-flash:free, api_key: os.environ/OFOX_AI_KEY, api_base: https://api.ofox.ai/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/gpt-4o-mini-2024-07-18, api_key: os.environ/LLM7_API_KEY, api_base: https://api.llm7.io/v1}}
 
   # Bluesmind — Chinese AI aggregator (OpenAI-compat). Free tier verified
   # 2026-05-25 with meta/llama-3.1-8b-instruct; deepseek-v4-flash returns
   # "Tier Restriction" so don't list it here. Larger models are paid.
-  - {model_name: free-mode, litellm_params: {model: openai/meta/llama-3.1-8b-instruct, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/meta/llama-3.1-8b-instruct, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
 
   # Kilocode — OpenRouter-compatible gateway with free-tier models.
   # x-ai/grok-code-fast-1:optimized:free is excluded — uses /responses API
   # not /chat/completions, which LiteLLM's openai/ provider can't bridge.
-  - {model_name: free-mode, litellm_params: {model: openai/kilo-auto/free,                          api_key: os.environ/KILOCODE_API_KEY, api_base: https://kilocode.ai/api/openrouter}}
-  - {model_name: free-mode, litellm_params: {model: openai/nvidia/nemotron-3-super-120b-a12b:free,  api_key: os.environ/KILOCODE_API_KEY, api_base: https://kilocode.ai/api/openrouter}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/kilo-auto/free,                          api_key: os.environ/KILOCODE_API_KEY, api_base: https://kilocode.ai/api/openrouter}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/nvidia/nemotron-3-super-120b-a12b:free,  api_key: os.environ/KILOCODE_API_KEY, api_base: https://kilocode.ai/api/openrouter}}
 
   # Opencode Zen — OpenAI-compatible. Several "-free" suffix models actually
   # free; minimax/qwen "free promotion has ended", premium models need payment.
-  - {model_name: free-mode, litellm_params: {model: openai/nemotron-3-super-free,    api_key: os.environ/OPENCODE_API_KEY, api_base: https://opencode.ai/zen/v1}}
-  - {model_name: free-mode, litellm_params: {model: openai/deepseek-v4-flash-free,   api_key: os.environ/OPENCODE_API_KEY, api_base: https://opencode.ai/zen/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/nemotron-3-super-free,    api_key: os.environ/OPENCODE_API_KEY, api_base: https://opencode.ai/zen/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: openai/deepseek-v4-flash-free,   api_key: os.environ/OPENCODE_API_KEY, api_base: https://opencode.ai/zen/v1}}
 
   # Cerebras: works for non-tool-call requests — fine for plain chat. Roo's tool
   # schemas with minItems/maxItems will still 400, but those auto-fall-through.
-  - {model_name: free-mode, litellm_params: {model: cerebras/llama3.1-8b, api_key: os.environ/CEREBRAS_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: cerebras/llama3.1-8b, api_key: os.environ/CEREBRAS_API_KEY}}
 
   # Together: re-included with Lite (8k); context_window_fallbacks routes oversize
-  # requests to free-mode-large automatically.
-  - {model_name: free-mode, litellm_params: {model: together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite, api_key: os.environ/TOGETHER_API_KEY}}
-  - {model_name: free-mode, litellm_params: {model: together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite, api_key: os.environ/TOGETHER_API_KEY_ALT}}
+  # requests to ULTRA_FREE_CLOUD_LARGE automatically.
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite, api_key: os.environ/TOGETHER_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE, litellm_params: {model: together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite, api_key: os.environ/TOGETHER_API_KEY_ALT}}
 
   # ====================================================================
-  # FREE MODE FAST — top free-tier providers by TPS that ALSO handle
-  # parallel/multi tool-calls (Roo emits 4-8 tool_use blocks per response).
+  # BAD_LEGACY_MIXED_F_MODE_FAST — historical mixed set (includes Cohere/Gemini).
+  # Use ULTRA_FREE_CLOUD_FAST for strict zero-cost routing.
   # NVIDIA NIM removed 2026-05-25 — its llama-3.1-8b NIM build returns
   # "This model only supports single tool-calls" on parallel tool_use,
   # breaking Roo's diff-apply workflow. Cerebras + Groq + Bluesmind handle
   # parallel calls fine. Use when latency dominates.
   # Benchmark refs from tools/benchmark_providers.py (2026-05-25).
   # ====================================================================
-  - {model_name: free-mode-fast, litellm_params: {model: cerebras/llama3.1-8b,              api_key: os.environ/CEREBRAS_API_KEY}}                                              # 287 tok/s
-  - {model_name: free-mode-fast, litellm_params: {model: groq/llama-3.1-8b-instant,         api_key: os.environ/GROQ_API_KEY}}                                                  # 224 tok/s
-  - {model_name: free-mode-fast, litellm_params: {model: groq/llama-3.1-8b-instant,         api_key: os.environ/GROQ_API_KEY_ALT}}                                              # 240 tok/s
-  - {model_name: free-mode-fast, litellm_params: {model: openai/meta/llama-3.1-8b-instruct, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}   # 103 tok/s
+  # 2026-11-06: the four 8B upstreams below were dead — groq llama-3.1-8b-instant
+  # and cerebras llama3.1-8b both return 404 "model does not exist" (retired by
+  # the providers), so the whole group failed over to ULTRA_FREE_CLOUD on every call.
+  # Repointed at the measured live replacements (gpt-oss on Groq + Cohere +
+  # Gemini Flash Lite). Same latency goal, actually alive.
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_FAST, litellm_params: {model: groq/openai/gpt-oss-20b,            api_key: os.environ/GROQ_API_KEY}}                                                  # 0.36s / 292 tok/s
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_FAST, litellm_params: {model: groq/openai/gpt-oss-20b,            api_key: os.environ/GROQ_API_KEY_ALT}}                                              # alt key
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_FAST, litellm_params: {model: groq/openai/gpt-oss-120b,           api_key: os.environ/GROQ_API_KEY}}                                                  # 0.39s / 215 tok/s (stronger)
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_FAST, litellm_params: {model: cohere/command-r7b-12-2024,          api_key: os.environ/COHERE_API_KEY}}                                                # 0.21s / 37 tok/s
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_FAST, litellm_params: {model: gemini/gemini-2.5-flash-lite,        api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}                                  # rate-limited tiers: last resort
+
+  # Free frontier, latency class (added 2026-11-11; measured 0.21-0.31 s).
+  # Same $0 guard as the ULTRA_FREE_CLOUD copies. Groq qwen3.8-27b leads: 262K ctx at
+  # free-tier Groq speed beats every other free option here on capability.
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_FAST, litellm_params: {model: groq/qwen/qwen3.8-27b, api_key: os.environ/GROQ_API_KEY_ALT, weight: 4}}
+  - model_name: BAD_LEGACY_MIXED_F_MODE_FAST
+    litellm_params:
+      model: openrouter/cohere/north-mini-code:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 3
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+  - model_name: BAD_LEGACY_MIXED_F_MODE_FAST
+    litellm_params:
+      model: openrouter/recursive/flint-v1.0:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 2
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+  - model_name: BAD_LEGACY_MIXED_F_MODE_FAST
+    litellm_params:
+      model: openrouter/liquid/lfm-3-1.7b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 1
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+
+
 
   # ====================================================================
   # PAID MODE FAST — top paid providers by TPS (all entries ≥50 tok/s).
   # Use when latency matters AND you want premium quality.
   # ====================================================================
-  - {model_name: paid-mode-fast, litellm_params: {model: xai/grok-4-fast-non-reasoning,           api_key: os.environ/XAI_API_KEY}}                                                       # 77 tok/s
-  - {model_name: paid-mode-fast, litellm_params: {model: xai/grok-4-fast-non-reasoning,           api_key: os.environ/XAI_API_KEY_ALT}}                                                   # 77 tok/s (alt key)
-  - {model_name: paid-mode-fast, litellm_params: {model: anthropic/claude-haiku-4-5-20251001,     api_key: os.environ/ANTHROPIC_API_KEY_ALT}}                                             # 70 tok/s
-  - {model_name: paid-mode-fast, litellm_params: {model: anthropic/claude-haiku-4-5-20251001,     api_key: os.environ/ANTHROPIC_API_KEY}}                                                 # 70 tok/s
-  - {model_name: paid-mode-fast, litellm_params: {model: deepseek/deepseek-chat,                  api_key: os.environ/DEEPSEEK_API_KEY}}                                                  # 53 tok/s
-  - {model_name: paid-mode-fast, litellm_params: {model: openai/gpt-5-chat,                       api_key: os.environ/BLUESMIND_API_KEY,  api_base: https://api.bluesminds.com/v1}}       # 50 tok/s
+  - {model_name: ULTRA_PAID_MODE_FAST, litellm_params: {model: xai/grok-4-fast-non-reasoning,           api_key: os.environ/XAI_API_KEY}}                                                       # 77 tok/s
+  - {model_name: ULTRA_PAID_MODE_FAST, litellm_params: {model: xai/grok-4-fast-non-reasoning,           api_key: os.environ/XAI_API_KEY_ALT}}                                                   # 77 tok/s (alt key)
+  - {model_name: ULTRA_PAID_MODE_FAST, litellm_params: {model: anthropic/claude-haiku-4-5-20251001,     api_key: os.environ/ANTHROPIC_API_KEY_ALT}}                                             # 70 tok/s
+  - {model_name: ULTRA_PAID_MODE_FAST, litellm_params: {model: anthropic/claude-haiku-4-5-20251001,     api_key: os.environ/ANTHROPIC_API_KEY}}                                                 # 70 tok/s
+  - {model_name: ULTRA_PAID_MODE_FAST, litellm_params: {model: deepseek/deepseek-chat,                  api_key: os.environ/DEEPSEEK_API_KEY}}                                                  # 53 tok/s
+  - {model_name: ULTRA_PAID_MODE_FAST, litellm_params: {model: openai/gpt-5-chat,                       api_key: os.environ/BLUESMIND_API_KEY,  api_base: https://api.bluesminds.com/v1}}       # 50 tok/s
 
   # ====================================================================
-  # FREE MODE TOOLS — subset of free-mode that handles PARALLEL tool_use
-  # cleanly. Use for Roo / Kilo / any agent that emits 4-8 tool_use blocks
+  # BAD_LEGACY_MIXED_F_MODE_TOOLS — historical mixed tool set (includes paid-capable providers).
+  # Use ULTRA_FREE_CLOUD_TOOLS for verified zero-cost tool routes.
+  # The old pool handled PARALLEL tool_use for Roo / Kilo / agents emitting 4-8 blocks
   # per response (file-edit batches, multi-search workflows).
   #
   # EXCLUDED and why (verified or strong evidence):
@@ -173,115 +288,279 @@ model_list:
   #   Gemini          — 20/day free cap hits fast under tool-call bursts
   #   OFOX / LLM7     — unverified parallel-tool support; safer to exclude
   # ====================================================================
-  - {model_name: free-mode-tools, litellm_params: {model: groq/llama-3.1-8b-instant,                   api_key: os.environ/GROQ_API_KEY}}
-  - {model_name: free-mode-tools, litellm_params: {model: groq/llama-3.1-8b-instant,                   api_key: os.environ/GROQ_API_KEY_ALT}}
-  - {model_name: free-mode-tools, litellm_params: {model: openai/gpt-4o-mini,                          api_key: os.environ/GITHUB_MODELS_KEY,  api_base: https://models.inference.ai.azure.com}}
-  - {model_name: free-mode-tools, litellm_params: {model: openai/gpt-4o-mini,                          api_key: os.environ/GITHUB_MODELS_KEY2, api_base: https://models.inference.ai.azure.com}}
-  - {model_name: free-mode-tools, litellm_params: {model: mistral/mistral-small-latest,                api_key: os.environ/MISTRAL_API_KEY}}
-  - {model_name: free-mode-tools, litellm_params: {model: mistral/mistral-small-latest,                api_key: os.environ/MISTRAL_API_KEY_ALT}}
-  - {model_name: free-mode-tools, litellm_params: {model: openai/meta-llama/Meta-Llama-3.1-8B-Instruct,api_key: os.environ/DEEPINFRA_API_KEY_ALT, api_base: https://api.deepinfra.com/v1/openai}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: groq/llama-3.1-8b-instant,                   api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: groq/llama-3.1-8b-instant,                   api_key: os.environ/GROQ_API_KEY_ALT}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: openai/gpt-4o-mini,                          api_key: os.environ/GITHUB_MODELS_KEY,  api_base: https://models.inference.ai.azure.com}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: openai/gpt-4o-mini,                          api_key: os.environ/GITHUB_MODELS_KEY2, api_base: https://models.inference.ai.azure.com}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: mistral/mistral-small-latest,                api_key: os.environ/MISTRAL_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: mistral/mistral-small-latest,                api_key: os.environ/MISTRAL_API_KEY_ALT}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: openai/meta-llama/Meta-Llama-3.1-8B-Instruct,api_key: os.environ/DEEPINFRA_API_KEY_ALT, api_base: https://api.deepinfra.com/v1/openai}}
   # AIMLAPI free key is intentionally disabled here because the cb876... key
   # currently returns ALL_TIME_LIMIT_EXCEEDED on chat calls.
-  - {model_name: free-mode-tools, litellm_params: {model: openai/gpt-5.5-instant,                      api_key: os.environ/HYPEREAL_API_KEY,   api_base: https://api.hypereal.cloud/v1}}
-  - {model_name: free-mode-tools, litellm_params: {model: openai/meta/llama-3.1-8b-instruct,           api_key: os.environ/BLUESMIND_API_KEY,  api_base: https://api.bluesminds.com/v1}}
-  - {model_name: free-mode-tools, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t,          api_key: os.environ/OPENROUTER_API_KEY}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: openai/gpt-5.5-instant,                      api_key: os.environ/HYPEREAL_API_KEY,   api_base: https://api.hypereal.cloud/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: openai/meta/llama-3.1-8b-instruct,           api_key: os.environ/BLUESMIND_API_KEY,  api_base: https://api.bluesminds.com/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_TOOLS, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t,          api_key: os.environ/OPENROUTER_API_KEY}}
 
   # ====================================================================
-  # FREE MODE LARGE — long-context fallback (>=128k input)
+  # TRUE FREE TOOLS — genuinely $0 AND tool-calling verified by test.
+  # Added 2026-11-04. Every entry is LOCAL: no API key, no quota, no bill.
+  #
+  # Why separate from ULTRA_FREE_CLOUD_TOOLS: that group has no local entries and
+  # escalates to ULTRA_PAID_MODE_FAST on failure, so it can silently bill. This
+  # group has NO fallback entry ON PURPOSE — if all three locals are down the
+  # request fails loudly instead of quietly running on a paid cloud model.
+  #
+  # Tool-calling verified 2026-11-04 with a tools= payload (response carried
+  # finish_reason: tool_calls and a populated tool_calls array):
+  #   hosted_vllm Qwen2.5-14B-Instruct   PASS
+  #   ollama_chat/qwen2.5:14b            PASS
+  #   ollama_chat/qwen3:30b-a3b          PASS
+  # Do NOT add cloud entries here on the strength of a "free" alias: a
+  # gemini-3.1-flash-lite deployment inside ULTRA_FREE_CLOUD billed $3.5e-06 per
+  # call, so alias naming is not evidence of zero cost. Verify with the
+  # x-litellm-response-cost header instead.
+  #
+  # Note: qwen3 is a thinking model — its reasoning trace shares the token
+  # budget. Measured 2026-11-04: max_tokens=300 returned empty content with
+  # finish_reason=length; max_tokens=1024 and 2048 both returned proper
+  # tool_calls (4/4). Give any qwen3 deployment >=1024 tokens.
   # ====================================================================
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-3-flash-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemma-4-26b-a4b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemma-4-31b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.0-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: free-mode-large, litellm_params: {model: gemini/gemini-2.0-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: free-mode-large, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
-  - {model_name: free-mode-large, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
-  - {model_name: free-mode-large, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY}}
+  - {model_name: ULTRA_FREE_TOOLS, litellm_params: {model: hosted_vllm/Qwen/Qwen2.5-14B-Instruct, api_key: local, api_base: http://localhost:8000/v1}}
+  - {model_name: ULTRA_FREE_TOOLS, litellm_params: {model: ollama_chat/qwen2.5:14b,             api_key: local, api_base: http://localhost:11434}}
+  - {model_name: ULTRA_FREE_TOOLS, litellm_params: {model: ollama_chat/qwen3:30b-a3b,            api_key: local, api_base: http://localhost:11434}}
+
+  # ====================================================================
+  # TRUE FREE TOOLS FAST — same zero-cost, local-only promise as
+  # ULTRA_FREE_TOOLS, but latency-first: only the small tool-capable models.
+  # Measured on this box 2026-11-08 (/tmp/bench_tps.py, 320-token target):
+  #   ollama qwen2.5:3b   15.5 tok/s   tools PASS
+  #   ollama llama3.2:3b  13.8 tok/s   tools PASS
+  #   ollama qwen2.5:7b   10.5 tok/s   tools PASS
+  #   ollama llama3.1:8b   8.9 tok/s   tools PASS (left out — no faster than 7b)
+  #   hosted_vllm 14B     5.4 tok/s   tools PASS (left out — ULTRA_FREE_TOOLS)
+  #   qwen2.5-coder:{3b,7b}, phi4-mini — ignored: returned finish_reason=stop
+  #   with an EMPTY tool_calls on the same payload, so they are not tool-safe.
+  # First call after idle pays a model-load penalty (3-23s measured); ollama
+  # unloads after its default 5m keep_alive, so this is a cold-start cost only.
+  # No fallback to cloud ON PURPOSE — see the ULTRA_FREE_TOOLS note above.
+  # ====================================================================
+  - {model_name: ULTRA_FREE_TOOLS_FAST, litellm_params: {model: ollama_chat/qwen2.5:3b,   api_key: local, api_base: http://localhost:11434, keep_alive: 24h}}
+  - {model_name: ULTRA_FREE_TOOLS_FAST, litellm_params: {model: ollama_chat/llama3.2:3b,  api_key: local, api_base: http://localhost:11434, keep_alive: 24h}}
+  - {model_name: ULTRA_FREE_TOOLS_FAST, litellm_params: {model: ollama_chat/qwen2.5:7b,   api_key: local, api_base: http://localhost:11434, keep_alive: 24h}}
+  - {model_name: ULTRA_FREE_TOOLS_FAST, litellm_params: {model: ollama_chat/qwen2.5:7b,   api_key: local, api_base: http://localhost:11434, keep_alive: 24h}}
+
+  # STRICT FREE-LOCAL — single measured default, no cloud fallback.
+  # Qwen3.5:35b-a3b: 76.4 decode tok/s, 12/14 coding, tools PASS/PASS;
+  # complete JSON verified through 261,652 input tokens in the prior host report.
+  - model_name: ULTRA_FREE_LOCAL
+    litellm_params:
+      model: ollama_chat/qwen3.5:35b-a3b
+      api_key: local
+      api_base: http://localhost:11434
+      keep_alive: 24h
+    model_info:
+      mode: chat
+      max_input_tokens: 262144
+      supports_function_calling: true
+      supports_vision: true
+      supports_reasoning: true
+
+  # STRICT FREE-LOCAL-CODING — qwen3.5:35b-a3b measured 12/14 coding, tools PASS/PASS,
+  # complete JSON through 261,652 input tokens. Best local coding model; vision + reasoning too.
+  - model_name: ULTRA_FREE_CODING
+    litellm_params:
+      model: ollama_chat/qwen3.5:35b-a3b
+      api_key: local
+      api_base: http://localhost:11434
+      keep_alive: 24h
+    model_info:
+      mode: chat
+      max_input_tokens: 262144
+      supports_function_calling: true
+      supports_vision: true
+      supports_reasoning: true
+
+
+
+
+  # ====================================================================
+  # BAD_LEGACY_MIXED_F_MODE_LARGE — old mixed long-context pool; not zero-cost guaranteed.
+  # ====================================================================
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-3-flash-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemma-4-26b-a4b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  # PARKED 2026-11-06 (same 16k TPM free-tier cap as ULTRA_FREE_CLOUD above)
+  # - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemma-4-31b-it, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-3.8-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
+  # 1M-context free reasoning model — the largest free window in the pool
+  # (added 2026-11-11, live-verified cost 0). High weight on purpose: for
+  # oversize prompts this is the only group member that fits without truncation.
+  - model_name: BAD_LEGACY_MIXED_F_MODE_LARGE
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      weight: 5
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
+  - {model_name: BAD_LEGACY_MIXED_F_MODE_LARGE, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY}}
+
+
+  # Strict replacements for the familiar ULTRA_FREE_CLOUD names. The mixed historical
+  # memberships remain separately available as BAD_LEGACY_MIXED_F_MODE*.
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: groq/openai/gpt-oss-120b, api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: groq/openai/gpt-oss-120b, api_key: os.environ/GROQ_API_KEY_ALT}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: groq/openai/gpt-oss-20b, api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: groq/openai/gpt-oss-20b, api_key: os.environ/GROQ_API_KEY_ALT}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: groq/qwen/qwen3.8-27b, api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: groq/qwen/qwen3.8-27b, api_key: os.environ/GROQ_API_KEY_ALT}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: openrouter/cohere/north-mini-code:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: openrouter/recursive/flint-v1.0:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+  - {model_name: ULTRA_FREE_CLOUD, litellm_params: {model: openrouter/liquid/lfm-3-1.7b:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+
+  - {model_name: ULTRA_FREE_CLOUD_FAST, litellm_params: {model: groq/openai/gpt-oss-120b, api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: ULTRA_FREE_CLOUD_FAST, litellm_params: {model: groq/openai/gpt-oss-20b, api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: ULTRA_FREE_CLOUD_FAST, litellm_params: {model: groq/qwen/qwen3.8-27b, api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: ULTRA_FREE_CLOUD_FAST, litellm_params: {model: openrouter/cohere/north-mini-code:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+  - {model_name: ULTRA_FREE_CLOUD_FAST, litellm_params: {model: openrouter/recursive/flint-v1.0:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+  - {model_name: ULTRA_FREE_CLOUD_FAST, litellm_params: {model: openrouter/liquid/lfm-3-1.7b:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+
+  - {model_name: ULTRA_FREE_CLOUD_TOOLS, litellm_params: {model: openrouter/cohere/north-mini-code:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+  - {model_name: ULTRA_FREE_CLOUD_TOOLS, litellm_params: {model: openrouter/recursive/flint-v1.0:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+  - {model_name: ULTRA_FREE_CLOUD_TOOLS, litellm_params: {model: openrouter/liquid/lfm-3-1.7b:free, api_key: os.environ/OPENROUTER_API_KEY, extra_body: {provider: {max_price: {prompt: 0, completion: 0}}}}}
+
+  # Long-context selector only: all members are zero-price fenced, up to 900K input.
+  - model_name: ULTRA_FREE_CLOUD_LARGE
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      max_tokens: 8192
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+    model_info:
+      max_input_tokens: 900000
+      max_output_tokens: 8192
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+  - model_name: ULTRA_FREE_CLOUD_LARGE
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3.5-lightning:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 240
+      max_tokens: 8192
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+        reasoning: {effort: none}
+    model_info:
+      max_input_tokens: 900000
+      max_output_tokens: 8192
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+  - model_name: ULTRA_FREE_CLOUD_LARGE
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3.5-super-vl:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 240
+      max_tokens: 8192
+      extra_body:
+        provider:
+          max_price: {prompt: 0, completion: 0}
+        reasoning: {effort: none}
+    model_info:
+      mode: chat
+      max_input_tokens: 900000
+      max_output_tokens: 8192
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+      supports_function_calling: true
+      supports_vision: true
 
   # ====================================================================
   # PAID MODE — premium frontier models
   # ====================================================================
-  - {model_name: paid-mode, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY_ALT}}
-  - {model_name: paid-mode, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY}}
-  - {model_name: paid-mode, litellm_params: {model: deepseek/deepseek-chat, api_key: os.environ/DEEPSEEK_API_KEY}}
-  - {model_name: paid-mode, litellm_params: {model: openai/moonshot-v1-8k, api_key: os.environ/MOONSHOT_API_KEY, api_base: https://api.moonshot.ai/v1, rpm: 5000, tpm: 3000000}}
-  - {model_name: paid-mode, litellm_params: {model: openai/moonshot-v1-8k, api_key: os.environ/MOONSHOT_API_KEY_ALT, api_base: https://api.moonshot.ai/v1, rpm: 5000, tpm: 3000000}}
-  - {model_name: paid-mode, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/AIMLAPI_PAID_KEY, api_base: https://api.aimlapi.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY_ALT, api_base: https://api.hypereal.cloud/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY_ALT}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: deepseek/deepseek-chat, api_key: os.environ/DEEPSEEK_API_KEY}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/moonshot-v1-8k, api_key: os.environ/MOONSHOT_API_KEY, api_base: https://api.moonshot.ai/v1, rpm: 5000, tpm: 3000000}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/moonshot-v1-8k, api_key: os.environ/MOONSHOT_API_KEY_ALT, api_base: https://api.moonshot.ai/v1, rpm: 5000, tpm: 3000000}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/AIMLAPI_PAID_KEY, api_base: https://api.aimlapi.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY_ALT, api_base: https://api.hypereal.cloud/v1}}
   # OpenAI direct (currently quota-exhausted — left so it auto-uses if you top up)
-  - {model_name: paid-mode, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/OPENAI_API_KEY}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/OPENAI_API_KEY}}
+
+  # Xiaomi MIMO token plan (added 2026-05-28)
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/xiaomi-mimo, api_key: os.environ/XIAOMI_MIMO_TOKEN_PLAN, api_base: https://token-plan-sgp.xiaomimimo.com/v1}}
 
   # xAI Grok direct (2 valid keys verified 2026-05-25 — both work on
   # grok-code-fast-1, grok-4-fast-non-reasoning, grok-3-mini).
-  - {model_name: paid-mode, litellm_params: {model: xai/grok-code-fast-1,           api_key: os.environ/XAI_API_KEY}}
-  - {model_name: paid-mode, litellm_params: {model: xai/grok-code-fast-1,           api_key: os.environ/XAI_API_KEY_ALT}}
-  - {model_name: paid-mode, litellm_params: {model: xai/grok-4-fast-non-reasoning,  api_key: os.environ/XAI_API_KEY}}
-  - {model_name: paid-mode, litellm_params: {model: xai/grok-3-mini,                api_key: os.environ/XAI_API_KEY}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: xai/grok-code-fast-1,           api_key: os.environ/XAI_API_KEY}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: xai/grok-code-fast-1,           api_key: os.environ/XAI_API_KEY_ALT}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: xai/grok-4-fast-non-reasoning,  api_key: os.environ/XAI_API_KEY}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: xai/grok-3-mini,                api_key: os.environ/XAI_API_KEY}}
 
   # Bluesmind-backed premium models — Chinese AI gateway, user has $100 credit
   # (registered-user bonus). Verified billing on 2026-05-25 via user dashboard.
   # Per-call pricing is tiny ($0.00013 max) so the credit lasts effectively forever.
-  # Wired into paid-mode (not free-mode) because they ARE paid upstreams; the
+  # Wired into ULTRA_PAID_MODE (not ULTRA_FREE_CLOUD) because they ARE paid upstreams; the
   # rotation just happens to consume free credit. If credit depletes, they
-  # auto-fall to other paid-mode entries via fallbacks.
-  - {model_name: paid-mode, litellm_params: {model: openai/gpt-5-chat,                api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/gpt-5-2025-08-07,          api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/moonshotai/kimi-k2.6,      api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/kimi-k2.5,                 api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/grok-4.20-fast,            api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/grok-code-fast-1,          api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/MiniMax-M2,                api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/openai/gpt-oss-120b,       api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/stepfun-ai/step-3.5-flash, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode, litellm_params: {model: openai/z-ai/glm-5.1,              api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  # auto-fall to other ULTRA_PAID_MODE entries via fallbacks.
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/gpt-5-chat,                api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/gpt-5-2025-08-07,          api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/moonshotai/kimi-k2.6,      api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/kimi-k2.5,                 api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/grok-4.20-fast,            api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/grok-code-fast-1,          api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/MiniMax-M2,                api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/openai/gpt-oss-120b,       api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/stepfun-ai/step-3.5-flash, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE, litellm_params: {model: openai/z-ai/glm-5.1,              api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
 
   # ====================================================================
   # PAID MODE LARGE — long-context paid fallback
   # ====================================================================
-  - {model_name: paid-mode-large, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY_ALT}}
-  - {model_name: paid-mode-large, litellm_params: {model: deepseek/deepseek-chat, api_key: os.environ/DEEPSEEK_API_KEY}}
-  - {model_name: paid-mode-large, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
+  - {model_name: ULTRA_PAID_MODE_LARGE, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY_ALT}}
+  - {model_name: ULTRA_PAID_MODE_LARGE, litellm_params: {model: deepseek/deepseek-chat, api_key: os.environ/DEEPSEEK_API_KEY}}
+  - {model_name: ULTRA_PAID_MODE_LARGE, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
   # Bluesmind premium long-context entries (Grok 4.20-fast = 1M context, GPT-5 = 200K+)
-  - {model_name: paid-mode-large, litellm_params: {model: openai/grok-4.20-fast, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode-large, litellm_params: {model: openai/gpt-5-chat,     api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
-  - {model_name: paid-mode-large, litellm_params: {model: openai/moonshotai/kimi-k2.6, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE_LARGE, litellm_params: {model: openai/grok-4.20-fast, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE_LARGE, litellm_params: {model: openai/gpt-5-chat,     api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
+  - {model_name: ULTRA_PAID_MODE_LARGE, litellm_params: {model: openai/moonshotai/kimi-k2.6, api_key: os.environ/BLUESMIND_API_KEY, api_base: https://api.bluesminds.com/v1}}
 
   # ====================================================================
-  # BACKWARD-COMPAT — hybrid-model = free-mode (so existing Roo configs work)
+  # BACKWARD-COMPAT — ULTRA_HYBRID_MODEL = ULTRA_FREE_CLOUD (so existing Roo configs work)
   # ====================================================================
-  - {model_name: hybrid-model, litellm_params: {model: groq/llama-3.1-8b-instant, api_key: os.environ/GROQ_API_KEY}}
-  - {model_name: hybrid-model, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
-  - {model_name: hybrid-model, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
-  - {model_name: hybrid-model, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY, api_base: https://models.inference.ai.azure.com}}
-  - {model_name: hybrid-model, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.0-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: hybrid-model-large, litellm_params: {model: gemini/gemini-2.0-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
-  - {model_name: hybrid-model-large, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
-  - {model_name: hybrid-model-large, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
-  - {model_name: hybrid-model-large, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY}}
-  - {model_name: hybrid-model-large, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
+  - {model_name: ULTRA_HYBRID_MODEL, litellm_params: {model: groq/llama-3.1-8b-instant, api_key: os.environ/GROQ_API_KEY}}
+  - {model_name: ULTRA_HYBRID_MODEL, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
+  - {model_name: ULTRA_HYBRID_MODEL, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
+  - {model_name: ULTRA_HYBRID_MODEL, litellm_params: {model: openai/gpt-4o-mini, api_key: os.environ/GITHUB_MODELS_KEY, api_base: https://models.inference.ai.azure.com}}
+  - {model_name: ULTRA_HYBRID_MODEL, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY, rpm: 5}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT, rpm: 5}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-2.5-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 5}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-2.5-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 10}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 15}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-3.1-pro-preview, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-2.5-pro, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-3.8-flash, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: gemini/gemini-3.1-flash-lite, api_key: os.environ/GEMINI_API_KEY_ALT2, rpm: 1}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: nvidia_nim/meta/llama-3.1-8b-instruct, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: fireworks_ai/accounts/fireworks/models/kimi-k2p5, api_key: os.environ/FIREWORKS_API_KEY}}
+  - {model_name: ULTRA_HYBRID_MODEL_LARGE, litellm_params: {model: openai/gpt-5.5-instant, api_key: os.environ/HYPEREAL_API_KEY, api_base: https://api.hypereal.cloud/v1}}
 
-  # ====================================================================
-  # Direct-target single-provider aliases (bypass rotation)
-  # ====================================================================
-  - {model_name: cloudflare-llama, litellm_params: {model: openai/@cf/meta/llama-3.1-8b-instruct, api_key: os.environ/CF_API_TOKEN, api_base: os.environ/CF_API_BASE}}
-  - {model_name: nvidia-deepseek-v4-pro, litellm_params: {model: nvidia_nim/deepseek-ai/deepseek-v4-pro, api_key: os.environ/NVIDIA_API_KEY, api_base: https://integrate.api.nvidia.com/v1}}
-  - {model_name: openrouter-ring-1t, litellm_params: {model: openrouter/inclusionai/ring-2.6-1t, api_key: os.environ/OPENROUTER_API_KEY}}
-  - {model_name: claude-haiku-direct, litellm_params: {model: anthropic/claude-haiku-4-5-20251001, api_key: os.environ/ANTHROPIC_API_KEY_ALT}}
-  - {model_name: deepseek-chat-direct, litellm_params: {model: deepseek/deepseek-chat, api_key: os.environ/DEEPSEEK_API_KEY}}
-  - {model_name: novita-deepseek-v4-pro-direct, litellm_params: {model: openai/deepseek/deepseek-v4-pro, api_key: os.environ/NOVITA_API_KEY, api_base: https://api.novita.ai/openai/v1}}
+
+
+
