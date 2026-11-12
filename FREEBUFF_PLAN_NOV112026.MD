@@ -213,7 +213,13 @@ See `FREEBUFF_NOV112026.MD` §8–9 for the reply to the Copilot agent's audit, 
 zero-weight-tail bug, provider-prefix detection limits, the Kilo host split and the current live state
 (19 groups / 212 deployments).
 
-## 11. Verification commands
+## 11. Free-provider generosity audit (2026-11-12)
+
+Live-probed ranking of 16 providers, the GitHub Models retirement (5 zombie deployments),
+the Cerebras/Mistral downgrades, the rotten-key repair queue, and why AMD Token Factory is
+excluded (China-IP only). See `FREEBUFF_NOV112026.MD` section 10.
+
+## 12. Verification commands
 
 ```bash
 python3 tools/free_model_discovery.py --no-probe --only kilo_gateway,openrouter,groq

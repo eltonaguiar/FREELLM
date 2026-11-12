@@ -380,3 +380,122 @@ means "proxy restarting", not "group broken"** — re-test before filing a bug.
 Not changed by me in this pass: the base `litellm_config.yaml` is regenerated into
 `litellm_config.runtime.yaml` by the other agent's launcher on every start, so I am not editing it while
 that agent is restarting the service; every open item above is written as a patch rather than applied.
+
+---
+
+## 10. UPDATE 2026-11-12 03:15Z — free-provider generosity audit (probed, with keys)
+
+Method: 16 providers hit live from this machine with the credentials in `~/dbpasses.txt`
+(one real `/chat/completions` call, `max_tokens=8`, browser UA), then cross-checked against
+each vendor's current docs. Probe status is what I trust; docs only explain it.
+**No key values appear below — labels only.**
+
+### 10.1 BLOCKER for the pool: GitHub Models is retired and we still route to it
+
+GitHub Models was shut down **2026-07-30** (playground, catalog, inference API and BYOK all gone).
+The endpoint is now a placeholder that answers **every** request with `200 text/plain "OK"`:
+
+```
+POST https://models.github.ai/inference/chat/completions
+  openai/gpt-4o-mini -> 200  content-type: text/plain   body: "OK\r\n"
+  openai/gpt-4.1     -> 200  content-type: text/plain   body: "OK\r\n"
+```
+
+The 23-deployment repair batch left **5 deployments on that dead base**, in 3 groups:
+
+| Group | GitHub deployments |
+|---|---|
+| `BAD_LEGACY_MIXED_F_MODE` | 2 |
+| `BAD_LEGACY_MIXED_F_MODE_TOOLS` | 2 |
+| `ULTRA_HYBRID_MODEL` | 1 |
+
+Those groups still answer `200` because other members serve, so nothing looks broken — but a
+request that lands on a GitHub route yields a non-JSON `"OK"`: an empty completion that passes
+every HTTP-level check. **Action: remove the 5 deployments, and mark `github_models` retired in
+`tools/free_provider_audit.py` so discovery cannot reintroduce it.** The two `GITHUB MODELS API KEY`
+credentials are moot until/unless GitHub revives the service.
+
+### 10.2 Two registry entries are no longer free — downgrade them
+
+| Provider | Registry says | Probe today | Vendor's own words |
+|---|---|---|---|
+| Cerebras | free tier, 1M tok/day | **402** | *"Is there a permanently free tier? No."* $5 credit, 30-day expiry, **card required** before API access |
+| Mistral | free Experiment tier (~1B tok/mo) | **429** on first call | *"Free mode includes a monthly usage budget for trying Vibe and Studio. It doesn't include API access."* |
+| Chutes | listed as free candidate | no free tier | *"We do not offer a free tier at this time."* |
+| Nebius | — | $1 trial, card required, 30 days | not worth wiring |
+| xAI | — | dead since Dec 2024 | — |
+
+The 1B-tokens/month Mistral figure is pre-2026 folklore; every page that used to carry it now 404s.
+
+### 10.3 Genuinely generous, ranked by *recurring* free volume
+
+| # | Provider | Recurring allowance | Card | Probe / status |
+|---|---|---|---|---|
+| 1 | Groq | **1,000 req + 200K tok/day per model**, 30 RPM (≈1.8M tok/day across 9 models) | no | **200** on `openai/gpt-oss-120b` |
+| 2 | Gemini | 1,500 req/day Flash, 1M ctx; multiplies per key | no | 429 on this key (quota used); 36 keys already pooled |
+| 3 | Cloudflare Workers AI | 10,000 neurons/day ≈ 147K output tok/day, 8 models | no | wired |
+| 4 | Kilo (anonymous) | ~200 req/h, **no key**, 10+ `:free` models incl. 550B | none | **200** keyless |
+| 5 | ModelScope | **2,000 calls/day**, 200/model/day, 38 models | no | catalog **200**, chat **401** (key stale) |
+| 6 | Baidu Qianfan | **17 models × 1M tokens** (3 mo) + ERNIE-Speed/Lite recurring | CN real-name | no key |
+| 7 | ~~AMD Radeon Token Factory~~ | 15 free models, daily reset — **China-IP restricted** | no | **NO-FLY from Canada** — see 10.5 |
+| 8 | Tencent TokenHub | **1M tokens per model** (DeepSeek-V4-Pro/Flash, GLM-5.2, Kimi-K2.6, MiniMax-M3), 90 days | CN ID | no key |
+| 9 | Alibaba Model Studio | 1M tokens **per model** (≈22 eligible ≈ 22M total), 90 days, SG intl OK | no | 403 free quota exhausted on this key |
+| 10 | Vercel AI Gateway | **$5 every 30 days, recurring** — only monthly-renewing credit found | card | no key |
+| 11 | Together | `Prism-ML/Ternary-Bonsai-27B` free in **and** out | $5 min | **200** (verified free) |
+| 12 | Cohere | 1,000 calls/month, 20 RPM, **non-commercial** | no | **200** on **both** trial keys |
+| 13 | Scaleway | 1M tokens one-time, EU-hosted, 8–15 open models | no | 403 — wrong credential type (see 10.4) |
+| 14 | OpenRouter | 50 req/day, **1,000/day after a one-time $10** | no | key present |
+| 15 | Z.ai | `glm-4.7-flash`, `glm-4.5-flash`, `glm-4.6v-flash` free (vision too) | no | **401** (key stale) |
+| 16 | SiliconFlow | rotating free small models (GLM-4-9B, R1-Distill-7B) | no | **401** (key stale) |
+
+Probed and rejected: SambaNova (**401**, and its free tier is 20 req/day), Hyperbolic (**404** model
+decommissioned, $1 trial), Upstage (**403** credit suspended), Qwen intl (**403** free quota
+exhausted), Nscale/Novita/Featherless (trial credits only), Cerebras/Mistral/Chutes (above).
+
+### 10.4 KEY REPAIR QUEUE — the part the other agent can act on
+
+Each row is a **rotten credential**, not a dead offer. All were reached with the label parser in
+`tools/start_litellm_proxy.sh` / `tools/free_provider_audit.py`.
+
+| Label to refresh | Endpoint probed | Status | What the fix buys |
+|---|---|---|---|
+| `MODELSCOPE API KEY :` | `api-inference.modelscope.cn/v1` | 401 | **2,000 calls/day** — the largest recurring call allowance of any provider here |
+| `ZAI_API_KEY` | `api.z.ai/api/paas/v4` | 401 | 3 permanently-free GLM flash models (text + vision) |
+| `SILICONFLOW.com API KEY:` | `api.siliconflow.cn/v1` | 401 | rotating free small models + fallback |
+| `SAMBANOVA_API_KEY:` | `api.sambanova.ai/v1` | 401 | 5 models, but only 20 req/day — low priority |
+| `SCALEWAY_ACCESS_KEY_ID:` / `SCALEWAY_SECRET_KEY:` | `api.scaleway.ai/v1` | 403 | **wrong credential type** — Generative APIs need a Scaleway API key, not S3 access/secret |
+| `GITHUB MODELS API KEY:` / `…KEY2:` | `models.github.ai/inference` | placeholder | service retired — nothing to fix, drop the routes |
+| `CEREBRAS_FREE_API_KEY:` | `api.cerebras.ai/v1` | 402 | trial exhausted; only helps if we pay |
+| `MISTRAL API KEY:` / `… ALT:` / `… ALT2:` | `api.mistral.ai/v1` | 429 | Free mode has no API access now; needs billing |
+| `QWEN_API_KEY_FREE` | `dashscope-intl…/compatible-mode/v1` | 403 | grant consumed; new 1M/model grants only for newly-released models |
+| `UPSTAGE.AI API KEY` | `api.upstage.ai/v1` | 403 | credit suspended |
+| `HYPERBOLIC API KEY :` | `api.hyperbolic.xyz/v1` | 404 | model decommissioned, endpoint dead for that id |
+| `GOOGLE GEMINI API KEY:` | `generativelanguage…/v1beta/openai` | 429 | this key's daily quota is spent — other Gemini keys are fine |
+
+Two protocol traps worth recording while wiring any of these:
+
+- **Cohere** speaks `/v2/chat`, not `/v1/chat/completions`. My first probe hit the OpenAI path and got
+  **405 Method Not Allowed**; on `/v2/chat` both trial keys return `200 "ok"`. Wiring Cohere as an
+  `openai/` deployment will fail for that reason alone.
+- **Together's free model is a specific id**: `Prism-ML/Ternary-Bonsai-27B` (free input *and* output).
+  `together/Tev1-4B-experimental` has free *output* only. Everything else on Together is metered
+  against the $5 minimum, so it is not a free pool.
+
+### 10.5 AMD Token Factory: dropped — China-IP only
+
+AMD's Radeon Cloud **Token Factory** (`https://developer.amd.com.cn/radeon/api/v1`) is the most
+generous *recurring* offer I found — 15 models free (DeepSeek-V4.1-Flash, GLM-5.3-Flash, Qwen3.8,
+Gemma-4-31B, MiniMax), daily quota resetting at midnight Beijing time, ~30 RPM per key, no card.
+It is served **only from the China site** and is IP-restricted; from Canada it is a no-fly. Recorded
+here so nobody wires it a second time: **exclude AMD from the pool.**
+
+### 10.6 Recommended order of work
+
+1. **Remove the 5 `models.github.ai` deployments** (silent `"OK"` bodies) and retire `github_models`.
+2. **Wire the two verified-free keys we already hold**: Together `Prism-ML/Ternary-Bonsai-27B`
+   (OpenAI-shaped, trivial) and Cohere trial via a `/v2/chat` adapter (or skip until an adapter exists).
+3. **Refresh the four 401 keys** (ModelScope, Z.ai, SiliconFlow, SambaNova) — ModelScope alone is
+   worth more calls/day than everything except Groq.
+4. **Downgrade Cerebras + Mistral** from "free" to "trial/paid" so discovery stops advertising them.
+5. Optional new accounts: Tencent TokenHub (1M × model), Alibaba Model Studio (1M × model, intl),
+   Vercel AI Gateway ($5/30 days). Baidu is 17M tokens but China real-name only.
