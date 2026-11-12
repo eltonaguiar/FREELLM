@@ -177,6 +177,146 @@ def _save_state(state: dict[str, Any]) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Cloudflare Workers AI neuron budget
+#
+# Workers AI reports the EXACT neuron cost of every request, in two places:
+#     response header   cf-ai-neurons: 1.86
+#     response body     usage.neurons: 1.8592603206634521
+# The free plan includes 10,000 neurons/day (resets 00:00 UTC). We measured
+# ~0.097 neurons/token on qwen3.8-27b and ~0.043 on llama-3.3-70b, so 10k is
+# roughly 100k-200k tokens — easy to burn in one long-context session.
+#
+# We therefore LEDGER REAL SPEND instead of estimating, and park the Cloudflare
+# deployments once a soft cap is reached (default 95% of budget, keeping a
+# reserve so in-flight requests complete). Parking BEFORE the quota is gone
+# gives callers a clean failover instead of a 429 storm — the same failure mode
+# that produced 144 RESOURCE_EXHAUSTED errors on Google on 2026-11-11.
+#
+#   CF_DAILY_NEURON_BUDGET=10000   neurons/day allowance (0 disables the cap)
+#   CF_NEURON_RESERVE=0.05         fraction held back from the soft cap
+#   LITELLM_CF_NEURON_STATE=path   ledger location
+# ---------------------------------------------------------------------------
+_CF_NEURON_STATE_PATH = Path(
+    os.environ.get("LITELLM_CF_NEURON_STATE", "/tmp/litellm_cf_neurons.json"))
+_CF_NEURON_BUDGET = float(os.environ.get("CF_DAILY_NEURON_BUDGET", "10000") or 0)
+_CF_NEURON_RESERVE = float(os.environ.get("CF_NEURON_RESERVE", "0.05") or 0)
+
+
+def _cf_soft_cap() -> float:
+    reserve = max(0.0, min(_CF_NEURON_RESERVE, 0.9))
+    return _CF_NEURON_BUDGET * (1.0 - reserve)
+
+
+def _cf_usage_load() -> dict[str, Any]:
+    try:
+        if _CF_NEURON_STATE_PATH.exists():
+            data = json.loads(_CF_NEURON_STATE_PATH.read_text())
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _cf_usage_save(state: dict[str, Any]) -> None:
+    try:
+        _CF_NEURON_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CF_NEURON_STATE_PATH.write_text(json.dumps(state, indent=2, default=str))
+    except Exception:
+        pass
+
+
+def record_neurons(amount: Any, model: str | None = None) -> None:
+    """Add the exact neuron cost of one completed request to today's ledger."""
+    try:
+        amt = float(amount)
+    except (TypeError, ValueError):
+        return
+    if amt <= 0:
+        return
+    today = _now_utc().strftime("%Y-%m-%d")
+    state = _cf_usage_load()
+    day = state.get(today) or {"neurons": 0.0, "requests": 0, "by_model": {}}
+    day["neurons"] = float(day.get("neurons", 0.0)) + amt
+    day["requests"] = int(day.get("requests", 0)) + 1
+    if model:
+        by_model = day.setdefault("by_model", {})
+        by_model[model] = float(by_model.get(model, 0.0)) + amt
+    day["last_utc"] = _now_utc().isoformat()
+    state[today] = day
+    for old in sorted(state)[:-14]:  # keep a fortnight of history
+        state.pop(old, None)
+    _cf_usage_save(state)
+
+
+def cf_neurons_used() -> float:
+    today = _now_utc().strftime("%Y-%m-%d")
+    try:
+        return float((_cf_usage_load().get(today) or {}).get("neurons", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cf_budget_exhausted() -> bool:
+    if _CF_NEURON_BUDGET <= 0:
+        return False
+    try:
+        return cf_neurons_used() >= _cf_soft_cap()
+    except Exception:
+        return False
+
+
+def cf_budget_status() -> dict[str, Any]:
+    used = cf_neurons_used()
+    return {
+        "used": round(used, 2),
+        "budget": _CF_NEURON_BUDGET,
+        "soft_cap": round(_cf_soft_cap(), 2),
+        "remaining": round(max(0.0, _CF_NEURON_BUDGET - used), 2),
+        "exhausted": _cf_budget_exhausted(),
+        "resets_in_s": _seconds_until_next_utc_midnight(),
+        "state": str(_CF_NEURON_STATE_PATH),
+    }
+
+
+def _extract_neurons(response_obj: Any) -> float | None:
+    """Pull the exact neuron cost out of a LiteLLM ModelResponse.
+
+    LiteLLM reshapes the OpenAI-compatible body into a ModelResponse, so the
+    non-standard `neurons` field can surface in several places depending on
+    version. Check them all, then fall back to the response header.
+    """
+    for obj in (getattr(response_obj, "usage", None), response_obj):
+        if obj is None:
+            continue
+        for attr in ("neurons", "neuron_count"):
+            val = getattr(obj, attr, None)
+            if val is not None:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    pass
+        extra = getattr(obj, "model_extra", None)
+        if isinstance(extra, dict) and extra.get("neurons") is not None:
+            try:
+                return float(extra["neurons"])
+            except (TypeError, ValueError):
+                pass
+    hidden = getattr(response_obj, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        for bucket in ("additional_headers", "headers", "response_headers"):
+            hdrs = hidden.get(bucket)
+            if isinstance(hdrs, dict):
+                for hk, hv in hdrs.items():
+                    if str(hk).lower() == "cf-ai-neurons":
+                        try:
+                            return float(hv)
+                        except (TypeError, ValueError):
+                            pass
+    return None
+
+
 def _norm_host(api_base: str | None, model: str | None) -> str:
     """Collapse every Google api_base to one token so cooldowns don't fragment.
 
@@ -233,18 +373,27 @@ def _active_cooldowns() -> dict[str, int]:
 
 
 def _filter_cooled(deployments):
-    """Drop deployments whose upstream is inside a smart-cooldown window."""
+    """Drop deployments whose upstream is inside a smart-cooldown window.
+
+    Also drops Cloudflare Workers AI deployments once today's neuron budget is
+    spent. Workers AI has no per-key failover: the allowance is per ACCOUNT, so
+    adding more tokens does not help — the only remedy is to leave the group
+    empty until the 00:00 UTC reset.
+    """
     try:
         if not deployments:
             return deployments
         active = _active_cooldowns()
-        if not active:
+        cf_blocked = _cf_budget_exhausted()
+        if not active and not cf_blocked:
             return deployments
         kept = []
         for dp in deployments:
             lp = (dp or {}).get("litellm_params") or {}
             key = _deployment_key(lp.get("model"), lp.get("api_base"))
             if key in active:
+                continue
+            if cf_blocked and "cloudflare.com" in str(lp.get("api_base") or "").lower():
                 continue
             kept.append(dp)
         # Fail-open: never strand a whole group with zero candidates.
@@ -374,6 +523,23 @@ class _SmartCooldown(CustomLogger):
             exc = kwargs.get("exception")
             category, cooldown_s = _classify(exc, api_base)
             _record(api_base, model, category, cooldown_s, str(exc) if exc else "")
+        except Exception:
+            pass
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):  # noqa: D401
+        """Ledger the exact neuron cost of every successful Cloudflare call."""
+        try:
+            amount = _extract_neurons(response_obj)
+            if amount is not None:
+                record_neurons(amount, kwargs.get("model"))
+        except Exception:
+            pass
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):  # sync variant
+        try:
+            amount = _extract_neurons(response_obj)
+            if amount is not None:
+                record_neurons(amount, kwargs.get("model"))
         except Exception:
             pass
 

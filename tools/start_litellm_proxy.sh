@@ -248,10 +248,16 @@ parse_key "CURSOR_API_KEY"                                                      
 parse_key "KILOCODE_API_KEY"                                                         KILOCODE_API_KEY
 parse_key "OPENCODE_API_KEY"                                                         OPENCODE_API_KEY
 # The 'OPENCODE_API_KEY' label above holds a DEAD key (api_key_expired, verified
-# 2026-11-12). The live OpenCode Zen credential is filed under a different label
-# belonging to the same account. parse_key() matches whole lines, so this does
-# not collide with "OPENAI_KEY". Added AFTER the stale line so it wins.
-parse_key "OPENAI_KEY_NOV112026"                                                     OPENCODE_API_KEY
+# 2026-11-12). The live OpenCode Zen credential is filed under
+# OPENCODE_OPENAI_KEY_NOV112026 — it was previously mislabelled as an OpenAI key,
+# which is why it looked like an OpenAI credential. parse_key() matches whole
+# lines, so this does not collide with "OPENAI_KEY". Added AFTER the stale line
+# so it wins.
+parse_key "OPENCODE_OPENAI_KEY_NOV112026"                                            OPENCODE_API_KEY
+# Backup OpenCode Zen credential. Same account tier as the primary: /models 200,
+# free ids 429 FreeUsageLimit, paid ids 402. Wired so it is picked up the moment
+# either account is funded or the free gate lifts.
+parse_key "OPENCODE_API_KEY_ALT"                                                     OPENCODE_API_KEY_ALT
 parse_key "BLUESMIND API KEY"                                                        BLUESMIND_API_KEY
 parse_key "DEEPINFRA API KEY_BEST:"                                                   DEEPINFRA_API_KEY_BEST
 parse_key "KIMI AI API KEY part of PROJECT:"                                          KIMI_PLATFORM_API_KEY
@@ -288,6 +294,7 @@ parse_key "OPENCODE.AI API KEY test (try Big Pickle or other free models)"      
 # doesn't accept os.environ/... interpolation on the cloudflare provider).
 if [[ -n "${CF_ACCOUNT_ID:-}" ]]; then
   export CF_API_BASE="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1"
+  export CLOUDFLARE_ACCOUNT_ID="${CF_ACCOUNT_ID}"   # litellm cloudflare/ provider reads this name
 fi
 
 # ---------------------------------------------------------------------------
@@ -300,6 +307,13 @@ fi
 # Fail-open: if discovery fails, we start from the static config unchanged.
 #   LITELLM_DYNAMIC_MODELS=0   disable entirely
 #   LITELLM_DYNAMIC_PROVIDERS= kilo,opencode,gemini (default)
+#   OPENROUTER_FREE_RPM=       weight for the ULTRA_FREE_OPENROUTER group (default 2)
+#
+# OpenRouter note: its free pool is metered PER ACCOUNT, not per model —
+# 50 req/day with no credit, 1000 req/day once any credit is bought. It is a
+# shared budget, so ULTRA_FREE_OPENROUTER is kept at a low rpm weight and is only
+# reached as a fallback. Check remaining quota: GET /api/v1/key ->
+# free_model_daily_requests.
 # ---------------------------------------------------------------------------
 if [[ "${LITELLM_DYNAMIC_MODELS:-1}" == "1" ]]; then
   PY_BIN=".venv/bin/python"
@@ -308,17 +322,20 @@ if [[ "${LITELLM_DYNAMIC_MODELS:-1}" == "1" ]]; then
   # resolves `callbacks: tools.xxx.yyy` relative to the CONFIG FILE's directory,
   # so a /tmp config makes the callback import fail and the proxy exits.
   DYNAMIC_OUT="$PWD/litellm_config.runtime.yaml"
+  # Keep discovery output OUT of $LOG: litellm opens $LOG with `>` moments later
+  # and truncates it, so every "why was provider X skipped" line vanished.
+  DYNAMIC_LOG="${DYNAMIC_LOG:-/tmp/litellm_dynamic.log}"
   # Belt and braces for the same resolution path.
   export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
   if "$PY_BIN" tools/litellm_dynamic_models.py \
         --base "$ACTIVE_CONFIG" \
         --out "$DYNAMIC_OUT" \
-        --providers "${LITELLM_DYNAMIC_PROVIDERS:-kilo,opencode,gemini}" \
-        >>"$LOG" 2>&1; then
+        --providers "${LITELLM_DYNAMIC_PROVIDERS:-kilo,opencode,gemini,pins,openrouter}" \
+        >>"$DYNAMIC_LOG" 2>&1; then
     ACTIVE_CONFIG="$DYNAMIC_OUT"
-    echo "[litellm-proxy] dynamic models: merged (+free gateway models)"
+    echo "[litellm-proxy] dynamic models: merged (+free gateway models) — log: $DYNAMIC_LOG"
   else
-    echo "[litellm-proxy] dynamic models: skipped (kept static config)"
+    echo "[litellm-proxy] dynamic models: skipped (kept static config) — log: $DYNAMIC_LOG"
   fi
 fi
 
