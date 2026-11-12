@@ -224,7 +224,6 @@ These providers were audited but are NOT active due to account restrictions:
 | Cloudflare Workers AI | Daily 10k-neuron quota exhausted; auto-rejoins at UTC midnight |
 | HuggingFace (specific model IDs) | Token works, but many hub-trending model IDs are not exposed via HF Router |
 | xAI Grok | Key reports invalid per xAI; needs regeneration at console.x.ai |
-| Inception (mercury) | `mercury` is cutoff-gated, but `mercury-2` works on current keys |
 | Ollama Cloud | SSH-ed25519 public key requiring JWT signing, not bearer auth |
 | Qwen DashScope | Key invalid per provider; re-issue needed |
 | Chutes | Account balance $0 |
