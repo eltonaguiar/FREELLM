@@ -564,3 +564,24 @@ the running proxy's `CF_ACCOUNT_ID` exactly.
 deployment after the `- model_name:` line (instead of after the whole entry) orphans the existing
 `litellm_params` block and produces a silently malformed entry. Insert at the next `- model_name:`
 boundary, or append to the group's last entry.
+
+#### 10.8.1 VALIDATED 2026-11-12 04:00Z — Cloudflare serves through the router
+
+Booted `litellm_config.runtime.yaml` on a throwaway port with the post-restart env:
+
+```
+cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast -> 'ok'  finish=stop
+cloudflare/@cf/meta/llama-3.1-8b-instruct           -> 'OK'  finish=stop
+```
+
+Without `CLOUDFLARE_ACCOUNT_ID` the same route 500s with `CloudflareException ... code 7003`, because
+LiteLLM cannot build `/accounts/<id>/ai/run`. So **both** edits are load-bearing: the deployment *and*
+the launcher export. The `:4000` process started before the launcher change, so its env has
+`CF_API_TOKEN` but no `CLOUDFLARE_ACCOUNT_ID` — first restart fixes it.
+
+Side finding, worth knowing before trusting the mixed group: 12 calls to `BAD_LEGACY_MIXED_F_MODE` at
+`max_tokens=32` produced **2 empty `content: ""` responses**, both `finish_reason=length` with the budget
+fully spent. That is the 10.7 reasoning-model trap landing in production shape — the free
+`openrouter/*:free` reasoning models think until the cap and answer nothing. Callers with small
+`max_tokens` will occasionally get an empty string with a `200`; either raise the floor or move
+reasoning-only models behind an explicit selector.
