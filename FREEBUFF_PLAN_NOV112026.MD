@@ -217,7 +217,8 @@ zero-weight-tail bug, provider-prefix detection limits, the Kilo host split and 
 
 Live-probed ranking of 16 providers, the GitHub Models retirement (5 zombie deployments),
 the Cerebras/Mistral downgrades, the rotten-key repair queue, and why AMD Token Factory is
-excluded (China-IP only). See `FREEBUFF_NOV112026.MD` section 10.
+excluded (China-IP only). Section 10.7 retracts Together's free model (reasoning-only, content=null),
+confirms Cohere is already wired, and confirms OpenRouter is funded at the 1,000/day tier.
 
 ## 12. Verification commands
 

@@ -441,7 +441,7 @@ The 1B-tokens/month Mistral figure is pre-2026 folklore; every page that used to
 | 8 | Tencent TokenHub | **1M tokens per model** (DeepSeek-V4-Pro/Flash, GLM-5.2, Kimi-K2.6, MiniMax-M3), 90 days | CN ID | no key |
 | 9 | Alibaba Model Studio | 1M tokens **per model** (≈22 eligible ≈ 22M total), 90 days, SG intl OK | no | 403 free quota exhausted on this key |
 | 10 | Vercel AI Gateway | **$5 every 30 days, recurring** — only monthly-renewing credit found | card | no key |
-| 11 | Together | `Prism-ML/Ternary-Bonsai-27B` free in **and** out | $5 min | **200** (verified free) |
+| 11 | Together | `Prism-ML/Ternary-Bonsai-27B` free in **and** out — **reasoning-only, do NOT wire (see 10.7)** | $5 min | **200** free, **but content=null** below `max_tokens≈200` |
 | 12 | Cohere | 1,000 calls/month, 20 RPM, **non-commercial** | no | **200** on **both** trial keys |
 | 13 | Scaleway | 1M tokens one-time, EU-hosted, 8–15 open models | no | 403 — wrong credential type (see 10.4) |
 | 14 | OpenRouter | 50 req/day, **1,000/day after a one-time $10** | no | key present |
@@ -492,10 +492,49 @@ here so nobody wires it a second time: **exclude AMD from the pool.**
 ### 10.6 Recommended order of work
 
 1. **Remove the 5 `models.github.ai` deployments** (silent `"OK"` bodies) and retire `github_models`.
-2. **Wire the two verified-free keys we already hold**: Together `Prism-ML/Ternary-Bonsai-27B`
-   (OpenAI-shaped, trivial) and Cohere trial via a `/v2/chat` adapter (or skip until an adapter exists).
+2. **Nothing to wire — both 'candidates' are already done or a trap.** Cohere trial is already wired
+   (`cohere/` maps to LiteLLM's `cohere_chat` provider, i.e. `/v2/chat`) and its key is live; Together's
+   free model is reasoning-only and was reverted (see 10.7).
 3. **Refresh the four 401 keys** (ModelScope, Z.ai, SiliconFlow, SambaNova) — ModelScope alone is
    worth more calls/day than everything except Groq.
 4. **Downgrade Cerebras + Mistral** from "free" to "trial/paid" so discovery stops advertising them.
 5. Optional new accounts: Tencent TokenHub (1M × model), Alibaba Model Studio (1M × model, intl),
    Vercel AI Gateway ($5/30 days). Baidu is 17M tokens but China real-name only.
+
+---
+
+### 10.7 CORRECTION 2026-11-12 03:45Z — Together's free model must NOT be wired
+
+I recommended `together_ai/Prism-ML/Ternary-Bonsai-27B` in 10.3/10.6. **That was wrong — retracted.**
+It is genuinely free (both directions) but it is a reasoning model that spends the budget thinking
+and returns `content: null` until `max_tokens` is large:
+
+```
+max_tokens=8    finish=length  content=None  reasoning="Here's a thinking process:..."  usage=23
+max_tokens=64   finish=length  content=None                                            usage=79
+max_tokens=256  finish=stop    content='ok'  (138 of 213 tokens were reasoning)          usage=213
+```
+
+Every LiteLLM client using the pool's normal small `max_tokens` would get an empty completion with a
+`200` — the exact silent-empty failure as the retired GitHub Models endpoint, but worse to diagnose
+because the upstream really is free. I wired it into `BAD_LEGACY_MIXED_F_MODE` + `ULTRA_FREE_CLOUD`,
+measured it, and **reverted**; `litellm_config.yaml` is back to 160 deployments with 0 Bonsai routes.
+Backups taken first: `litellm_config.yaml.bak.20261112T031907Z` (+ runtime).
+
+**Rule to add to the free-model probe:** a free model is only poolable if a `max_tokens=64` call
+returns non-empty `content`. Free pricing says nothing about whether the model answers.
+
+Two corrections to the other direction, so nobody "fixes" what already works:
+
+- **Cohere needs no work.** `cohere/command-r7b-12-2024` is wired and its key returns `200 'ok'` on
+  `/v2/chat`. LiteLLM maps the `cohere/` prefix to provider `cohere_chat` (i.e. `/v2/chat`) — my
+  earlier `/v1/chat/completions` 405 was a direct-call artifact, not a config bug. A 4th Cohere row
+  in `~/dbpasses.txt` (`sk-1de…`, unlabeled) is dead — ignore it.
+- **OpenRouter is our best free pool and it is funded.** `/api/v1/key` → `limit=45`,
+  `limit_remaining=42.61`, `is_free_tier=false`. The paid threshold lifts the cap from 50 to
+  **1,000 req/day**, so the ~20 existing `openrouter/*:free` deployments in
+  `BAD_LEGACY_MIXED_F_MODE*`, `ULTRA_FREE_CLOUD*` and `ULTRA_HYBRID_MODEL_LARGE` are live at the high
+  ceiling. Nothing to wire — just don't let a cleanup pass delete them.
+
+Also flagged: someone added `together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite` ×2 (config lines
+215/216) at 03:16Z. That model is **metered**, not free — it bills against the $5 minimum.
