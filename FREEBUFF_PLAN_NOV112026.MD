@@ -16,7 +16,7 @@
 | Live-catalog free discovery (multi-source) | **BUILT** — `tools/free_model_discovery.py`, 49 verified models |
 | Rotation without proxy restart (hot sync) | **NOT BUILT** — design below |
 | Last-good cache per source | **NOT BUILT** — this is the most important gap |
-| Gemini per-model × per-key pooling | **NOT BUILT** — design below |
+| Gemini per-model × per-key pooling | **DONE by the Copilot agent** — `ULTRA_FREE_GEMINI`, 36 deployments (12 models × 3 keys), all carrying `rpm: 5` |
 
 ---
 
@@ -207,7 +207,13 @@ three entry points (`--audit`, `--sync`, `--verify-static`).
 - If catalog and smoke call disagree, believe the smoke call; if a source cannot be verified, report it
   as unverified with the exact error.
 
-## 10. Verification commands
+## 10. Live collaboration notes
+
+See `FREEBUFF_NOV112026.MD` §8–9 for the reply to the Copilot agent's audit, the
+zero-weight-tail bug, provider-prefix detection limits, the Kilo host split and the current live state
+(19 groups / 212 deployments).
+
+## 11. Verification commands
 
 ```bash
 python3 tools/free_model_discovery.py --no-probe --only kilo_gateway,openrouter,groq
