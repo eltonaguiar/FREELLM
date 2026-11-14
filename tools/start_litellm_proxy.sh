@@ -24,6 +24,98 @@
 # Stop a backgrounded proxy: kill the PID printed at launch, or:
 #   pkill -f 'litellm.*litellm_config'
 
+# ---------------------------------------------------------------
+# learn_more — ELI5 explainer + interactive mini-menu. Invoked by
+#   bash tools/start_litellm_proxy.sh --learn-more
+#   bash tools/start_litellm_proxy.sh --menu
+# ---------------------------------------------------------------
+learn_more() {
+  clear 2>/dev/null || true
+  cat <<'EOF'
+============================================================
+ FREELLM proxy at http://localhost:4000/v1 — what is this?
+============================================================
+
+ELI5
+-----
+Think of this as a "phone operator" for AI. You (or your code) call
+ONE number — http://localhost:4000/v1 — and the operator secretly
+forwards your call to whichever free AI provider has time right now.
+If the first provider is busy, it automatically tries the next one, so
+you keep getting an answer without having to know which company you
+are actually talking to.
+
+Why it exists
+-------------
+- Free AI providers each have small daily limits (e.g. 1,000 requests
+  a day, or 20 requests a minute).
+- One provider alone goes quiet quickly. Rotating across many keeps the
+  pool always-available.
+- Your code only ever talks to ONE fixed address; the proxy does the
+  switching behind the scenes.
+
+The three modes
+---------------
+  free-mode        -> free providers only (default money spent)
+  free-mode-fast   -> fastest free providers, with tool calling
+  free-mode-large  -> big-context free providers (e.g. 1M tokens)
+  paid-mode        -> premium providers (costs money per token)
+
+  You can also use "hybrid-model" — an alias for a sensible mix.
+
+Quick start (all of these point at the SAME :4000 endpoint)
+-----------------------------------------------------------
+  # 1. Start (foreground):
+  bash tools/start_litellm_proxy.sh
+
+  # 2. Start in background (keeps running after you close the terminal):
+  bash tools/start_litellm_proxy.sh --background
+
+  # 3. Test:
+  curl -s http://localhost:4000/v1/chat/completions \
+    -H "Authorization: Bearer anything" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"free-mode","messages":[{"role":"user","content":"1+1?"}],"max_tokens":50}'
+
+  # 4. Check health:
+  curl -s http://localhost:4000/health/readiness
+
+  # 5. Stop a backgrounded proxy:
+  pkill -f 'litellm.*litellm_config'
+
+Useful flags
+------------
+  --background / -b     background + log file
+  --port 5000           different port (default 4000)
+  --config path.yaml     different config
+  --keys-file path       different keys file (default ~/dbpasses.txt)
+  --free-tier-hygiene    enable experimental free-tier hygiene (default OFF)
+  ALLOW_PAID_SPILLOVER=0   forbid free->paid fallback (strict free mode)
+  LITELLM_FREE_TIER_HYGIENE=1   same as --free-tier-hygiene
+EOF
+  echo
+  echo "What would you like to do?"
+  echo "  1) Start proxy (foreground)"
+  echo "  2) Start proxy (background)"
+  echo "  3) Test the endpoint"
+  echo "  4) Check health"
+  echo "  5) Show this help again"
+  echo "  q) Quit"
+  read -r -p "Choice: " _learn_choice
+  case "$_learn_choice" in
+    1) exec bash "$0" ;;
+    2) exec bash "$0" --background ;;
+    3) exec curl -s http://localhost:4000/v1/chat/completions \
+           -H "Authorization: Bearer anything" \
+           -H "Content-Type: application/json" \
+           -d '{"model":"free-mode","messages":[{"role":"user","content":"1+1?"}],"max_tokens":50}' ;;
+    4) exec curl -s http://localhost:4000/health/readiness ;;
+    5) learn_more ;;
+    q|Q|quit|"") echo "Bye."; exit 0 ;;
+    *) echo "Unknown choice."; learn_more ;;
+  esac
+}
+
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -43,6 +135,9 @@ while [[ $# -gt 0 ]]; do
     --config)        CONFIG="$2"; shift 2 ;;
     --keys-file)     KEYS_FILE="$2"; shift 2 ;;
     --free-tier-hygiene) FREE_TIER_HYGIENE=1; shift ;;
+    --learn-more|--menu|-m)
+      learn_more
+      exit 0 ;;
     -h|--help)
       sed -n '2,25p' "$0"
       exit 0 ;;
