@@ -26,6 +26,28 @@ litellm_settings:
   set_verbose: false
   request_timeout: 90
   callbacks: tools.litellm_smart_cooldown.smart_cooldown
+  # -------------------------------------------------------------------------
+  # Free-tier hygiene (EXPERIMENTAL, OPT-IN, DEFAULT OFF)
+  #
+  # This block is documentation/inert: LiteLLM's proxy has no `custom_router`
+  # config hook in the pinned version, so it is NOT read by the proxy. It is
+  # here so the deployable wiring is discoverable in the config. The actual
+  # opt-in path lives in the launcher:
+  #
+  #   bash tools/start_litellm_proxy.sh --free-tier-hygiene
+  #   LITELLM_FREE_TIER_HYGIENE=1 bash tools/start_litellm_proxy.sh
+  #
+  # When enabled, the launcher registers tools/litellm_free_tier_router.py
+  # (FreeTierRouter) via a bootstrap sitecustomize on PYTHONPATH. When disabled
+  # (default), this block is ignored and routing is identical to stock LiteLLM.
+  # No model_list entry below is ever changed. See docs/FREE_TIER_HYGIENE.md.
+  # -------------------------------------------------------------------------
+  free_tier_hygiene:
+    enabled: false   # flipped to true only by the launcher flag; inert otherwise
+    note: >-
+      Experimental, opt-in, default-off. When enabled the launcher replaces the
+      router implementation with tools/litellm_free_tier_router.FreeTierRouter
+      (daily quota pre-filter, provider circuit breaker, empty-200 failover).
 
 router_settings:
   routing_strategy: simple-shuffle

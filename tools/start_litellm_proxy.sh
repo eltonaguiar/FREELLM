@@ -18,6 +18,8 @@
 #   bash tools/start_litellm_proxy.sh --port 5000          # alt port
 #   ALLOW_PAID_SPILLOVER=0 bash tools/start_litellm_proxy.sh -b
 #   PROXY_LOG=/tmp/litellm.log bash tools/start_litellm_proxy.sh -b
+#   bash tools/start_litellm_proxy.sh --free-tier-hygiene  # EXPERIMENTAL opt-in
+#   LITELLM_FREE_TIER_HYGIENE=1 bash tools/start_litellm_proxy.sh
 #
 # Stop a backgrounded proxy: kill the PID printed at launch, or:
 #   pkill -f 'litellm.*litellm_config'
@@ -31,6 +33,7 @@ CONFIG="${CONFIG:-litellm_config.yaml}"
 ALLOW_PAID_SPILLOVER="${ALLOW_PAID_SPILLOVER:-1}"
 PORT="${PORT:-4000}"
 BG=0
+FREE_TIER_HYGIENE="${FREE_TIER_HYGIENE:-0}"
 LOG="${PROXY_LOG:-/tmp/litellm_proxy.log}"
 
 while [[ $# -gt 0 ]]; do
@@ -39,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --port)          PORT="$2"; shift 2 ;;
     --config)        CONFIG="$2"; shift 2 ;;
     --keys-file)     KEYS_FILE="$2"; shift 2 ;;
+    --free-tier-hygiene) FREE_TIER_HYGIENE=1; shift ;;
     -h|--help)
       sed -n '2,25p' "$0"
       exit 0 ;;
@@ -337,6 +341,31 @@ if [[ "${LITELLM_DYNAMIC_MODELS:-1}" == "1" ]]; then
   else
     echo "[litellm-proxy] dynamic models: skipped (kept static config) — log: $DYNAMIC_LOG"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# Free-tier hygiene (EXPERIMENTAL, OPT-IN, DEFAULT OFF)
+#   --free-tier-hygiene | LITELLM_FREE_TIER_HYGIENE=1|true|yes|on  enable
+#
+# LiteLLM's proxy builds its router internally via litellm.Router.from_config
+# and has no `custom_router` config hook in the pinned version. When enabled we
+# drop a sitecustomize.py onto PYTHONPATH (tools/free_tier_bootstrap) that swaps
+# litellm.Router for our FreeTierRouter subclass at interpreter startup. When the
+# flag is off (default) that directory is never on the path, nothing is patched,
+# and routing is identical to stock — no model_list entry is ever changed.
+# ---------------------------------------------------------------------------
+if [[ "${LITELLM_FREE_TIER_HYGIENE:-0}" == "1" || \
+      "${LITELLM_FREE_TIER_HYGIENE:-0}" == "true" || \
+      "${LITELLM_FREE_TIER_HYGIENE:-0}" == "yes" || \
+      "${LITELLM_FREE_TIER_HYGIENE:-0}" == "on" ]]; then
+  FREE_TIER_HYGIENE=1
+fi
+if [[ "$FREE_TIER_HYGIENE" == "1" ]]; then
+  export LITELLM_FREE_TIER_HYGIENE=1
+  export PYTHONPATH="$PWD/tools/free_tier_bootstrap${PYTHONPATH:+:$PYTHONPATH}"
+  echo "[litellm-proxy] free-tier hygiene: ENABLED (experimental; FreeTierRouter)"
+else
+  echo "[litellm-proxy] free-tier hygiene: OFF (default; stock router)"
 fi
 
 # Pre-flight: which keys did we successfully load?

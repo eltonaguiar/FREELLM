@@ -56,6 +56,9 @@ nano ~/dbpasses.txt
 
 # 3. Start the proxy
 bash tools/start_litellm_proxy.sh --background
+#    (Optional, EXPERIMENTAL) enable free-tier hygiene:
+#    bash tools/start_litellm_proxy.sh --background --free-tier-hygiene
+#    LITELLM_FREE_TIER_HYGIENE=1 bash tools/start_litellm_proxy.sh -b
 
 # 4. Verify health
 curl -s http://localhost:4000/health/readiness
@@ -69,6 +72,55 @@ curl -s http://localhost:4000/v1/chat/completions \
 # 6. Stop the proxy
 pkill -f 'litellm.*litellm_config'
 ```
+
+## Free-Tier Hygiene (Experimental, opt-in, default OFF)
+
+`tools/litellm_free_tier_router.py` ships a `FreeTierRouter` (`litellm.Router`
+subclass) that adds three free-tier-hygiene behaviours on top of the stock
+router:
+
+1. **Daily quota-budget pre-filter** — skip a provider when its per-day budget
+   is exhausted, *before* calling it.
+2. **Provider-scope circuit breaker** — park an entire provider for a cooldown
+   after a `401`/`403`.
+3. **Empty-200-as-failure failover** — for models tagged `model_info.free_tier:
+   true`, a `200` with empty content counts as a failure and falls back to the
+   next candidate (skipped for `stream=True`).
+
+This is **opt-in and default-off**. Without it, routing is identical to stock
+LiteLLM; no `model_list` entry in `litellm_config.yaml` is ever changed.
+
+**Enable it** with either the launcher flag or the env var:
+
+```bash
+bash tools/start_litellm_proxy.sh --background --free-tier-hygiene
+# or
+LITELLM_FREE_TIER_HYGIENE=1 bash tools/start_litellm_proxy.sh -b
+```
+
+The launcher registers the custom router only when enabled (by placing a small
+`sitecustomize` bootstrap on `PYTHONPATH` that swaps `litellm.Router` for
+`FreeTierRouter` at interpreter startup). With the flag off, the bootstrap is
+never on the path and nothing is patched. Confirm it is active vs off from the
+launcher's startup line:
+
+```
+[litellm-proxy] free-tier hygiene: ENABLED (experimental; FreeTierRouter)   # on
+[litellm-proxy] free-tier hygiene: OFF (default; stock router)               # off
+```
+
+Tuning env vars (all optional, only read when the feature is on):
+
+- `LITELLM_FREE_TIER_BUDGET` — JSON dict of per-provider daily limits, e.g.
+  `'{"openai":0,"groq":5000}'`.
+- `LITELLM_FREE_TIER_COOLDOWN_SECONDS` — how long a `401`/`403` parks a
+  provider (default `60`).
+- Per-model opt-in: mark a deployment `model_info.free_tier: true` for the
+  empty-200 failover to apply to it.
+
+**⚠️ Experimental.** The feature is opt-in and isolated but not yet battle-tested
+in production. Run with it on a pilot/fallback pool first. Full details:
+`docs/FREE_TIER_HYGIENE.md`.
 
 ## Client Setup
 
