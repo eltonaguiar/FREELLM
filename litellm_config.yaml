@@ -92,7 +92,7 @@ router_settings:
     # Strict selector fallbacks. These never reach a paid group.
   retry_policy:
     BadRequestErrorRetries: 1
-    AuthenticationErrorRetries: 0
+    AuthenticationErrorRetries: 1
     TimeoutErrorRetries: 2
     RateLimitErrorRetries: 3
     ContentPolicyViolationErrorRetries: 0
