@@ -99,7 +99,6 @@ SPECS: list[dict[str, Any]] = [
     P("github_models", "https://models.github.ai/inference",
       ["GITHUB MODELS API KEY:", "GITHUB MODELS API KEY2:"]),
     P("llm7", "https://api.llm7.io/v1", ["LLM7_API_KEY_FREE"]),
-    P("inception", "https://api.inceptionlabs.ai/v1", ["INCEPTION_AI_KEY"]),
     # --- free tiers we suspected but never wired -------------------------
     P("sambanova", "https://api.sambanova.ai/v1", ["SAMBANOVA_API_KEY:",
                                                    "SAMBANOVA CLOUD API KEY(expires in 1 year after 2026-11-02 Nov 2 2026)"]),

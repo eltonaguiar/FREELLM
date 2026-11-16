@@ -72,7 +72,6 @@ LABELS: list[tuple[str, str]] = [
     ("QWEN_API_KEY_FREE",       "QWEN_API_KEY_FREE"),
     ("CHUTES_API_KEY",          "CHUTES"),
     ("LLM7_API_KEY",            "LLM7_API_KEY_FREE"),
-    ("INCEPTION_API_KEY",       "INCEPTION_AI_KEY"),
     ("NOVITA_API_KEY",          "NOVITA API KEY:"),
     ("CURSOR_API_KEY",          "CURSOR_API_KEY"),
     ("KILOCODE_API_KEY",        "KILOCODE_API_KEY"),
@@ -378,9 +377,6 @@ def t_llm7(key: str) -> tuple[str, str]:
     return t_openai_compat("https://api.llm7.io/v1/chat/completions", key, "gpt-4o-mini-2024-07-18")
 
 
-def t_inception(key: str) -> tuple[str, str]:
-    return t_openai_compat("https://api.inceptionlabs.ai/v1/chat/completions", key, "mercury-2")
-
 
 def t_novita(key: str) -> tuple[str, str]:
     return t_openai_compat("https://api.novita.ai/openai/v1/chat/completions", key, "deepseek/deepseek-v4-pro")
@@ -430,7 +426,6 @@ TESTS: list[tuple[str, str, Any]] = [
     ("qwen (free)",       "QWEN_API_KEY_FREE",       t_qwen_free),
     ("chutes",            "CHUTES_API_KEY",          t_chutes),
     ("llm7",              "LLM7_API_KEY",            t_llm7),
-    ("inception",         "INCEPTION_API_KEY",       t_inception),
     ("novita",            "NOVITA_API_KEY",          t_novita),
 ]
 
